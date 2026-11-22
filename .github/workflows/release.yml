@@ -1,0 +1,91 @@
+name: Release
+
+# 推送 v* 标签后运行测试、打包，并创建草稿 Release。
+# 在 GitHub 上核对附件、补写发布说明后再手动发布；草稿不会触发应用内自动更新。
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUTF8: "1"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Check tag matches __version__
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          version=$(python -c "import re; print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('version.py', encoding='utf-8').read()).group(1))")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match __version__ $version"
+            exit 1
+          fi
+
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements-build.txt
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: Build ClassicDrop
+        shell: pwsh
+        run: .\build.ps1 -Python python
+
+      - name: Create portable ZIP
+        run: python -c "import shutil; shutil.make_archive('dist/ClassicDrop-Windows-x64', 'zip', 'dist', 'ClassicDrop')"
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer
+        shell: pwsh
+        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer\ClassicDrop.iss'
+
+      - name: Upload Windows packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: ClassicDrop-Windows
+          path: |
+            dist/ClassicDrop-Windows-x64.zip
+            dist/installer/ClassicDropSetup-*.exe
+          if-no-files-found: error
+          retention-days: 30
+
+  draft-release:
+    needs: [windows]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v8
+        with:
+          path: packages
+          merge-multiple: true
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 构件可能带子目录（如 installer/），只上传其中的文件。
+          mapfile -t files < <(find packages -type f | sort)
+          printf '%s\n' "${files[@]}"
+          gh release create "$GITHUB_REF_NAME" "${files[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --title "ClassicDrop $GITHUB_REF_NAME" \
+            --notes "发布说明待补充。"

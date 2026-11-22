@@ -1,0 +1,7 @@
+* text=auto eol=lf
+# Third-party files and the licence text are stored byte for byte.
+vendor/** -text
+LICENSE -text
+*.ico binary
+*.mp3 binary
+*.m4a binary

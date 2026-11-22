@@ -1,0 +1,211 @@
+"""Move only library-owned music to private slots until the database commits."""
+
+import base64
+import hashlib
+import json
+import os
+import plistlib
+import re
+import stat
+from pathlib import Path
+
+from iPodDB.sidecars import (MAX_SIDECAR_BYTES, genius_playlist_number, is_playback_sidecar,
+                             parse_itunes_stats, parse_play_counts_plist, remap_genius_playlist,
+                             remap_playback_sidecar)
+from library import DB, MUSIC, MUSIC_SUFFIXES, STAGE, fingerprint, inside, write_file
+
+
+def _digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def _sidecars(device):
+    parent = inside(device.root, DB).parent
+    return {p.name: inside(device.root, p.relative_to(device.root))
+            for p in parent.iterdir() if is_playback_sidecar(p.name)}
+
+
+def _remap(name, data, before, after, old_ids, new_ids):
+    if not data:
+        return data
+    if genius_playlist_number(name) is not None:
+        return remap_genius_playlist(data, tuple(t.ipod.db_track_id for t in before),
+                                     tuple(t.ipod.db_track_id for t in after))
+    if data[:4] in (b"mhdp", b"pdhm", b"mhpo", b"ophm"):
+        return remap_playback_sidecar(data, old_ids, new_ids)
+    if name.casefold() == "playcounts.plist":
+        counts = parse_play_counts_plist(data)
+        deleted = {t.ipod.db_track_id for t in before} - {t.ipod.db_track_id for t in after}
+        if not any(row.persistent_id in deleted for row in counts.entries):
+            return data
+        root = plistlib.loads(data)
+        root["tracks"] = [v for v, row in zip(root["tracks"], counts.entries, strict=True)
+                          if row.persistent_id not in deleted]
+        fmt = plistlib.FMT_BINARY if data.startswith(b"bplist") else plistlib.FMT_XML
+        return plistlib.dumps(root, fmt=fmt, sort_keys=False)
+    if name.casefold() == "itunesstats":
+        counts = parse_itunes_stats(data)
+        if len(counts.entries) > len(old_ids):
+            raise ValueError("播放记录数超过原曲目数。")
+        word = 3 if counts.format == "iTunesStats24" else 4
+        offset = word * 2
+        keep = set(new_ids)
+        rows = []
+        for identity in old_ids[:len(counts.entries)]:
+            size = int.from_bytes(data[offset:offset + word], "little")
+            if identity in keep:
+                rows.append(data[offset:offset + size])
+            offset += size
+        return len(rows).to_bytes(word, "little") + data[word:2 * word] + b"".join(rows) + data[offset:]
+    raise ValueError("无法识别播放记录格式。")
+
+
+def _music_file(device, location):
+    parts = Path(location).parts
+    if (len(parts) == 4 and "/".join(parts[:2]).casefold() == MUSIC.casefold()
+            and re.fullmatch(r"F[0-9]{2}", parts[2], re.I) and Path(parts[3]).suffix.lower() in MUSIC_SUFFIXES):
+        return inside(device.root, location)
+    return None
+
+
+def _file_stamp(path):
+    stat = path.stat()
+    return [stat.st_size, stat.st_mtime_ns]
+
+
+def removal_receipt(device, desired, after_hash, report):
+    before, after = device.library.snapshot.tracks, desired.tracks
+    old_ids, new_ids = tuple(t.track_id for t in before), tuple(t.track_id for t in after)
+    keep = set(new_ids)
+    protected = {_music_file(device, os.path.normpath(t.metadata.location)) for t in after if t.metadata.location}
+    media = {}
+    for track in before:
+        if track.track_id in keep:
+            continue
+        path = _music_file(device, track.metadata.location)
+        if path is None or path in protected or path in media or not path.exists():
+            continue
+        stamp = _file_stamp(path)
+        if not path.is_file() or stamp[0] != track.size_bytes:
+            raise ValueError(f"音频文件与曲库记录不符，已停止删除：{path.name}")
+        media[path] = [path.relative_to(device.root).as_posix(), stamp]
+    updates = {}
+    for name, path in _sidecars(device).items():
+        if not path.is_file() or path.stat().st_size > MAX_SIDECAR_BYTES:
+            raise ValueError(f"无法核对设备上的播放记录：{name}")
+        data = path.read_bytes()
+        try:
+            result = _remap(name, data, before, after, old_ids, new_ids)
+        except ValueError as error:
+            raise ValueError(f"无法保留《{name}》的播放记录，已停止删除。\n{error}") from error
+        if result == data:
+            new = "same"
+        elif result is None:
+            new = None
+        else:
+            new = base64.b64encode(result).decode("ascii")
+        readonly = bool(path.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY)
+        updates[name] = [_digest(data), new, readonly]
+    report(f"已核对 {len(media)} 个独立音频文件。")
+    return dict(before=device.version, after=after_hash, guid=device.guid.hex(),
+                media=list(media.values()), sidecars=updates)
+
+
+def quarantine(device, receipt, report):
+    slots = inside(device.root, STAGE + "/removed")
+    slots.mkdir()
+    count = len(receipt["media"])
+    for i, (relative, stamp) in enumerate(receipt["media"]):
+        path = inside(device.root, relative)
+        if _file_stamp(path) != stamp:
+            raise ValueError(f"歌曲在操作期间已变化，请刷新后重试：{path.name}")
+        if i % 100 == 0 or i + 1 == count:
+            report(f"准备删除 {i + 1}/{count} · {path.name}")
+        path.rename(slots / str(i))
+    files = _sidecars(device)
+    if (files.keys() != receipt["sidecars"].keys() or
+            any(fingerprint(path) != receipt["sidecars"][name][0] for name, path in files.items())):
+        raise ValueError("设备上的播放记录已变化，请刷新后重试。")
+
+
+def checked_receipt(device, plan, backups, kind):
+    for key in ("before", "after", "receipt"):
+        if not re.fullmatch(r"[0-9a-f]{64}", plan[key]):
+            raise ValueError("操作记录的校验值无效。")
+    if backups is None:
+        raise ValueError("请在发起操作的电脑上打开「恢复中断操作」。")
+    path = Path(backups) / device.guid.hex() / plan["before"][:20] / (kind + "-" + plan["receipt"] + ".json")
+    if not path.is_file():
+        raise ValueError(f"需要本次操作的电脑备份记录：{path}")
+    data = path.read_bytes()
+    if _digest(data) != plan["receipt"]:
+        raise ValueError("电脑上的操作记录未通过校验。")
+    receipt = json.loads(data)
+    if (receipt["before"], receipt["after"], receipt["guid"]) != (plan["before"], plan["after"], device.guid.hex()):
+        raise ValueError("操作记录与设备曲库不匹配。")
+    return receipt, path.parent
+
+
+def settle_removal(device, plan, backups, committed):
+    receipt, _ = checked_receipt(device, plan, backups, "delete")
+    slots = inside(device.root, STAGE + "/removed")
+    if slots.exists():
+        expected = {str(i) for i in range(len(receipt["media"]))}
+        if any(p.name not in expected for p in slots.iterdir()):
+            raise ValueError("暂存目录中出现其他文件，请检查后再恢复。")
+    for i, (relative, stamp) in enumerate(receipt["media"]):
+        slot = inside(device.root, STAGE + "/removed/" + str(i))
+        if slot.exists():
+            if not slot.is_file() or _file_stamp(slot) != stamp:
+                raise ValueError(f"暂存音频已改变，已保留：{relative}")
+            if committed:
+                try:
+                    slot.unlink()
+                except PermissionError:
+                    if not slot.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY:
+                        raise
+                    slot.chmod(stat.S_IWRITE)
+                    slot.unlink()
+            else:
+                # Windows rename never overwrites a file recreated at the original path.
+                slot.rename(inside(device.root, relative))
+        elif not committed:
+            original = inside(device.root, relative)
+            if not original.is_file():
+                raise ValueError(f"暂存音频和原文件均不可用：{relative}")
+    if slots.is_dir():
+        slots.rmdir()
+    if committed:
+        _apply_sidecars(device, receipt["sidecars"])
+
+
+def _apply_sidecars(device, updates):
+    # Release the deleted music's space before allocating a replacement sidecar.
+    part = inside(device.root, STAGE + "/sidecar.part")
+    for name, (old, new, readonly) in updates.items():
+        if new == "same":
+            continue
+        live = inside(device.root, "iPod_Control/iTunes/" + name)
+        result = base64.b64decode(new, validate=True) if new is not None else None
+        actual = fingerprint(live) if live.exists() else None
+        if actual == (_digest(result) if result is not None else None):
+            if readonly and result is not None:
+                live.chmod(stat.S_IREAD)
+            continue
+        if actual != old:
+            raise ValueError(f"播放记录已经改变，已保留现场：{name}")
+        if result is not None:
+            part.unlink(missing_ok=True)
+            write_file(part, result)
+            if fingerprint(part) != _digest(result):
+                raise OSError(f"播放记录写入校验失败：{name}")
+        if readonly:
+            live.chmod(stat.S_IWRITE)
+        try:
+            if result is None:
+                live.unlink()
+            else:
+                os.replace(part, live)
+        finally:
+            if readonly and live.exists():
+                live.chmod(stat.S_IREAD)
