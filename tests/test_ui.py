@@ -16,6 +16,7 @@ from test_native_covers import ART_DB, FORMATS, covered_m4a, picture
 sys.path.insert(0, str(ROOT))
 from tkinter import ttk
 import app
+import system
 from import_dialog import MODE_NAMES
 from library import Device, playlist_edit
 from transfer import transfer
@@ -31,8 +32,12 @@ class WindowsUITests(unittest.TestCase):
             dialog = next((w for w in window.winfo_children() if isinstance(w, app.ImportDialog)), None)
             if dialog and dialog.rows and not dialog.scanning:
                 try:
-                    self.assertIsNone(dialog.grab_current())
-                    self.assertTrue(window.attributes("-disabled"))
+                    if system.WINDOWS:
+                        self.assertIsNone(dialog.grab_current())
+                        self.assertTrue(app._disabled(window))
+                    else:
+                        # Modality comes from the dialog's grab where -disabled does not exist.
+                        self.assertIs(dialog.grab_current(), dialog)
                     interact(dialog)
                 except BaseException as exc:
                     errors.append(exc)
@@ -55,7 +60,7 @@ class WindowsUITests(unittest.TestCase):
             window.after_cancel(timer)
         if errors:
             raise errors[0]
-        self.assertFalse(window.attributes("-disabled"))
+        self.assertFalse(app._disabled(window))
 
     def make_window(self):
         window = app.TkinterDnD.Tk()
