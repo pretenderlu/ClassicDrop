@@ -438,7 +438,7 @@ def prepared_files(files, formats, device_root, report, *, reviewed=None):
     files = tuple(Path(p) for p in files)
     formats = dict(formats or {})
     reviewed = reviewed or {}
-    if reviewed and (set(reviewed) != set(files) or any(p != song.path or formats.get(p, song.mode) not in song.choices
+    if reviewed and (set(reviewed) != set(files) or any(p.resolve() != song.path or formats.get(p, song.mode) not in song.choices
                                                        for p, song in reviewed.items())):
         raise ValueError("预览的歌曲或传输格式与本批文件不一致。")
     if formats.keys() - set(files):

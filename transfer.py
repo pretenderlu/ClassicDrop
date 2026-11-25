@@ -337,13 +337,17 @@ def export_tracks(device, tracks, directory, report=lambda _: None):
                 while True:
                     name = stem if index == 1 else f"{stem} ({index})"
                     destination = directory / (name + suffix)
+                    if destination.exists() or destination.is_symlink():
+                        # POSIX rename silently overwrites; the no-replace check must run first.
+                        if destination.is_file() and not destination.is_symlink() and fingerprint(destination) == digest:
+                            break
+                        index += 1
+                        continue
                     try:
                         temp.rename(destination)
                         written += 1
                         break
                     except FileExistsError:
-                        if destination.is_file() and not destination.is_symlink() and fingerprint(destination) == digest:
-                            break
                         index += 1
             finally:
                 temp.unlink(missing_ok=True)

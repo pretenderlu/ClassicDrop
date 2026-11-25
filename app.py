@@ -73,7 +73,8 @@ class App:
         window.geometry(f"{width}x{height}")
         window.minsize(min(width, px(810)), min(height, px(505)))
         if (BASE / "ClassicDrop.ico").exists():
-            window.iconbitmap(default=str(BASE / "ClassicDrop.ico"))
+            if system.WINDOWS:
+                window.iconbitmap(default=str(BASE / "ClassicDrop.ico"))
             theme.ICON = BASE / "ClassicDrop.ico"
         window.option_add("*Font", (theme.FONT, 10))
         self.device = None
