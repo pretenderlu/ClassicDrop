@@ -1,6 +1,7 @@
 import math
 import struct
 import subprocess
+import system
 import unittest
 import wave
 from dataclasses import replace
@@ -32,14 +33,14 @@ def write_wave(path, rate=44100, channels=2, width=2):
 
 def ffmpeg(*args):
     return subprocess.run([get_ffmpeg_exe(), "-nostdin", "-v", "error", *map(str, args)], check=True,
-                          capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW).stdout
+                          capture_output=True, **system.NO_WINDOW).stdout
 
 
 class FormatsAndPlaylists(unittest.TestCase):
     def setUp(self):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        self.site = Path(temp.name)
+        self.site = Path(temp.name).resolve()
         self.root = self.site / "IPC3"
         self.device = mock_device(self.root)
         self.backups = self.site / "backups"

@@ -20,7 +20,7 @@ class GeniusRemovalTests(unittest.TestCase):
     def setUp(self):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        self.site = Path(temp.name)
+        self.site = Path(temp.name).resolve()
         self.root = self.site / "iPod"
         self.backups = self.site / "backups"
         transfer(mock_device(self.root), [FIXTURES / "tone.mp3", FIXTURES / "aac.m4a", FIXTURES / "lossless.m4a"], self.backups)

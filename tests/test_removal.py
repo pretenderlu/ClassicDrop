@@ -1,6 +1,7 @@
 import json
 import plistlib
 import stat
+import system
 import struct
 from dataclasses import replace
 from pathlib import Path
@@ -24,7 +25,7 @@ class MusicRemovalTests(unittest.TestCase):
     def setUp(self):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        self.site = Path(temp.name)
+        self.site = Path(temp.name).resolve()
         self.root = self.site / "IPC3"
         self.backups = self.site / "backup"
         self.db = self.root / DB
@@ -67,7 +68,7 @@ class MusicRemovalTests(unittest.TestCase):
         self.assertEqual(after.playlists[0].track_ids, (ids[0],ids[2]))
         self.assertFalse((self.root / snap.tracks[1].metadata.location).exists())
         self.assertEqual(counts.read_bytes(), positions(b"mhdp", 96, 16, (11, 33)))
-        self.assertTrue(counts.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY)
+        self.assertTrue(system.is_readonly(counts.stat()))
         self.assertEqual(otg.read_bytes(), positions(b"mhpo", 20, 4, (1,0)))
         self.assertEqual(empty_otg.read_bytes(), b"")
         self.assertEqual(plistlib.loads(plist.read_bytes()), {"tracks": [rows[0],rows[2]], "other": "keep"})
@@ -146,7 +147,7 @@ class MusicRemovalTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 self.run_write(remove_ids=[track.track_id], report=stop)
             recover_interrupted(self.device, self.backups)
-            self.assertTrue(media.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY)
+            self.assertTrue(system.is_readonly(media.stat()))
             self.run_write(remove_ids=[track.track_id])
             self.assertFalse(media.exists())
         finally:

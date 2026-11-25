@@ -6,11 +6,14 @@ import tkinter as tk
 import unittest
 from unittest.mock import patch
 
+import system
 import app
 from updates import PROJECT_URL, Release, UpdateError, UpdateInfo
 from version import __version__
 
 PAGE = "https://github.com/pretenderlu/ClassicDrop/releases/"
+OFFER_BUTTON = "打开下载页" if system.MAC else "下载并安装 v9.9.9"
+PAGE_BUTTON = "打开下载页" if system.MAC else "打开发布页"
 NEWER = UpdateInfo("v9.9.9", PAGE + "v9.9.9", "https://example.invalid/setup.exe", "ClassicDropSetup-v9.9.9.exe", 100,
                    "a" * 64, "", "- 新增 **A**\n- 修复 B")
 HISTORY = (Release("v9.9.9", PAGE + "v9.9.9", "2026-12-01", "· 新增 A\n· 修复 B"),
@@ -22,7 +25,7 @@ class UpdateInterfaceTests(unittest.TestCase):
     def setUp(self):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        self.site = Path(temp.name)
+        self.site = Path(temp.name).resolve()
         window = self.window = app.TkinterDnD.Tk()
         def cleanup():
             for timer in window.tk.call("after", "info"):
@@ -177,15 +180,16 @@ class UpdateInterfaceTests(unittest.TestCase):
         self.check(NEWER, asked=True)
         self.settle(self.answered("_history_arrived", before))
         self.assertEqual(len(self.dialogs()), 1)
-        self.assertIn("下载并安装 v9.9.9", self.shown()[2])
+        self.assertIn(OFFER_BUTTON, self.shown()[2])
 
+    @unittest.skipUnless(system.WINDOWS, "the offered installer flow is Windows only")
     def test_version_number_opens_the_history_and_installs_the_newer_release(self):
         ui = self.ui
         self.history((HISTORY, NEWER))
         dialog, = self.dialogs()
         self.assertEqual(dialog.title(), "版本与更新")
         text, state, buttons = self.shown()
-        self.assertEqual((state, buttons), ("发现新版本 v9.9.9", ["关闭", "下载并安装 v9.9.9"]))
+        self.assertEqual((state, buttons), ("发现新版本 v9.9.9", ["关闭", OFFER_BUTTON]))
         self.assertEqual(text.splitlines(), [
             "v9.9.9   2026-12-01   新版本", "· 新增 A", "· 修复 B",
             f"v{__version__}   2026-11-25   当前版本", "· 这一版的内容",
@@ -206,7 +210,7 @@ class UpdateInterfaceTests(unittest.TestCase):
             return destination
         with patch.object(app, "download_update", side_effect=download) as fetched, \
                 patch.object(app.subprocess, "Popen") as started, patch.object(self.window, "destroy") as closed:
-            self.button("下载并安装 v9.9.9").invoke()
+            self.button(OFFER_BUTTON).invoke()
             self.assertEqual(self.dialogs(), [])
             self.settle(lambda: closed.called)
         target = self.site / "ClassicDrop" / "updates" / "ClassicDropSetup-v9.9.9.exe"
@@ -252,7 +256,7 @@ class UpdateInterfaceTests(unittest.TestCase):
         text, state, buttons = self.shown()
         self.assertEqual((text.splitlines(), state, buttons),
                          (["v9.9.9   新版本", "· 新增 A", "· 修复 B", "", "无法读取更新记录：offline"],
-                          "发现新版本 v9.9.9", ["关闭", "下载并安装 v9.9.9"]))
+                          "发现新版本 v9.9.9", ["关闭", OFFER_BUTTON]))
         # An answer that arrives after the dialog was closed is dropped.
         ui.close_versions()
         before = self.handled.count("_history_arrived")
@@ -261,13 +265,14 @@ class UpdateInterfaceTests(unittest.TestCase):
         self.settle(self.answered("_history_arrived", before))
         self.assertEqual(self.dialogs(), [])
 
+    @unittest.skipUnless(system.WINDOWS, "the offered installer flow is Windows only")
     def test_update_waits_for_work_and_queued_songs_and_failures_offer_a_retry(self):
         ui = self.ui
         self.check(NEWER)
         with patch.object(app.messagebox, "showwarning") as warned:
             ui.pending = {Path("a.mp3"): None}
             self.history((HISTORY, NEWER))  # reading the history is always allowed
-            self.button("下载并安装 v9.9.9").invoke()
+            self.button(OFFER_BUTTON).invoke()
             self.assertIn("待传列表里还有 1 首", warned.call_args.args[1])
             ui.pending = {}
             ui.busy = True
@@ -299,9 +304,9 @@ class UpdateInterfaceTests(unittest.TestCase):
     def test_release_without_an_installer_opens_its_page(self):
         bare = UpdateInfo("v9.9.9", NEWER.url, notes="")
         self.history((HISTORY, bare))
-        self.assertEqual(self.shown()[2], ["关闭", "打开发布页"])
+        self.assertEqual(self.shown()[2], ["关闭", PAGE_BUTTON])
         with patch.object(app.webbrowser, "open") as opened, patch.object(app, "download_update") as fetched:
-            self.button("打开发布页").invoke()
+            self.button(PAGE_BUTTON).invoke()
         opened.assert_called_once_with(NEWER.url, new=2)
         fetched.assert_not_called()
         self.assertEqual(self.dialogs(), [])

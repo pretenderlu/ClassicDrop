@@ -27,7 +27,7 @@ class RatingClickTests(unittest.TestCase):
         logging.disable(logging.NOTSET)
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        self.site = Path(temp.name)
+        self.site = Path(temp.name).resolve()
         window = self.window = app.TkinterDnD.Tk()
         def cleanup():
             for timer in window.tk.call("after", "info"):

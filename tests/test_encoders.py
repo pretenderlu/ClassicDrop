@@ -40,7 +40,7 @@ class EncoderChainTests(unittest.TestCase):
     def setUp(self):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        self.site = Path(temp.name)
+        self.site = Path(temp.name).resolve()
         self.wav = self.site / "a.wav"
         write_wave(self.wav)
         logging.disable(logging.NOTSET)
@@ -116,7 +116,7 @@ class RefalacIntegrationTests(unittest.TestCase):
     def setUp(self):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        self.site = Path(temp.name)
+        self.site = Path(temp.name).resolve()
         logging.disable(logging.NOTSET)
         self.addCleanup(logging.disable, logging.WARNING)
 
@@ -186,7 +186,7 @@ class InstallAppleTests(unittest.TestCase):
     def setUp(self):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        self.root = Path(temp.name) / "ClassicDrop"
+        self.root = Path(temp.name).resolve() / "ClassicDrop"
         patcher = patch.object(encoders, "QTFILES", self.root / "QTfiles64")
         patcher.start()
         self.addCleanup(patcher.stop)

@@ -11,6 +11,7 @@ from urllib.error import HTTPError, URLError
 
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
+import system
 import updates
 from updates import UpdateError, UpdateInfo, check_for_updates, download_update, plain_notes, release_history, version_key
 from version import __version__
@@ -54,10 +55,16 @@ class CheckTests(unittest.TestCase):
         request = opened.call_args.args[0]
         self.assertEqual(request.full_url, "https://api.github.com/repos/pretenderlu/ClassicDrop/releases/latest")
         self.assertEqual(request.get_header("User-agent"), f"ClassicDrop/{__version__}")
-        self.assertEqual((info.version, info.download_url, info.installer_name, info.size, info.sha256, info.notes),
-                         ("v9.9.9", "https://example.invalid/setup.exe", "ClassicDropSetup-v9.9.9.exe", 10, DIGEST,
-                          "- 修复若干问题"))
-        self.assertEqual(info.alternate_url, "https://api.example.invalid/asset/1")
+        if system.MAC:
+            # macOS is never offered the Windows installer; the release page opens instead.
+            self.assertEqual((info.version, info.download_url, info.installer_name, info.size, info.sha256,
+                              info.alternate_url, info.notes),
+                             ("v9.9.9", "", "", 0, "", "", "- 修复若干问题"))
+        else:
+            self.assertEqual((info.version, info.download_url, info.installer_name, info.size, info.sha256, info.notes),
+                             ("v9.9.9", "https://example.invalid/setup.exe", "ClassicDropSetup-v9.9.9.exe", 10, DIGEST,
+                              "- 修复若干问题"))
+            self.assertEqual(info.alternate_url, "https://api.example.invalid/asset/1")
 
     def test_release_that_cannot_be_verified_only_offers_its_page(self):
         for payload in (release("v9.9.9", digest=None), release("v9.9.9", digest="12"),
@@ -95,7 +102,8 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual([(r.version, r.published, r.notes) for r in releases],
                          [("v9.9.9", "2026-12-01", "· 修复若干问题"), ("v1.5.1", "2026-11-22", "下载\n\n· a.exe：见 Issues。")])
         self.assertTrue(all(r.url.startswith("https://github.com/") for r in releases))
-        self.assertEqual((update.version, update.installer_name, update.sha256), ("v9.9.9", "ClassicDropSetup-v9.9.9.exe", DIGEST))
+        self.assertEqual((update.version, update.installer_name, update.sha256),
+                         ("v9.9.9", "", "") if system.MAC else ("v9.9.9", "ClassicDropSetup-v9.9.9.exe", DIGEST))
         with latest(payload):
             self.assertIsNone(release_history("9.9.9")[1])
         with latest([]):
@@ -112,7 +120,7 @@ class DownloadTests(unittest.TestCase):
     def setUp(self):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        self.target = Path(temp.name) / "updates" / "setup.exe"
+        self.target = Path(temp.name).resolve() / "updates" / "setup.exe"
         self.content = b"installer-bytes" * 1000
         self.info = UpdateInfo("v9.9.9", "https://github.com/x", "https://dl.invalid/setup.exe", "setup.exe",
                                len(self.content), hashlib.sha256(self.content).hexdigest(), "https://api.invalid/asset")

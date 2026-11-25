@@ -1,4 +1,5 @@
 import logging
+import system
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import sys
@@ -16,7 +17,7 @@ class DiagnosticsTests(unittest.TestCase):
     def setUp(self):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        self.site = Path(temp.name)
+        self.site = Path(temp.name).resolve()
         diagnostics.reset()
         self.addCleanup(diagnostics.reset)
         # test_classicdrop silences INFO for the whole suite; these tests need the file handler to see it.
@@ -74,7 +75,7 @@ class DiagnosticsTests(unittest.TestCase):
             diagnostics.remember("出错了", exc)
         text = diagnostics.report("iPod classic（第 7 代）")
         self.assertIn("ClassicDrop：v" + __version__, text)
-        self.assertIn("Windows", text)
+        self.assertIn("macOS" if system.MAC else "Windows", text)
         self.assertIn("iPod classic（第 7 代）", text)
         self.assertIn("出错了", text)
         self.assertIn("RuntimeError", text)

@@ -35,7 +35,7 @@ class NanoIdentityTests(unittest.TestCase):
     def setUp(self):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        self.root = Path(temp.name)
+        self.root = Path(temp.name).resolve()
         self.info = self.root / "iPod_Control/Device"
         self.info.mkdir(parents=True)
 
@@ -97,7 +97,7 @@ class NanoLibraryTests(unittest.TestCase):
     def setUp(self):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        self.site = Path(temp.name)
+        self.site = Path(temp.name).resolve()
         self.root = self.site / "nano"
         self.backups = self.site / "backups"
 

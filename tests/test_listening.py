@@ -27,7 +27,7 @@ class ListeningTests(unittest.TestCase):
     def setUp(self):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        self.site = Path(temp.name)
+        self.site = Path(temp.name).resolve()
         self.root = self.site / "iPod"
         transfer(mock_device(self.root), [FIXTURES / "tone.mp3", FIXTURES / "aac.m4a", FIXTURES / "lossless.m4a"],
                  self.site / "backups")

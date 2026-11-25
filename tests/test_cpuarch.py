@@ -106,7 +106,7 @@ class SelfTestTests(unittest.TestCase):
         from selftest import self_test
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "self-test.json"
-            self.assertEqual(self_test(out), 0)
+            self.assertEqual(self_test(out), 0, out.read_text(encoding="utf-8"))
             report = json.loads(out.read_text(encoding="utf-8"))
         self.assertTrue(report["ok"], report)
         self.assertEqual(report["version"], updates.__version__)

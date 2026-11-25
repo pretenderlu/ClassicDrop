@@ -60,7 +60,7 @@ class DffImportTests(unittest.TestCase):
     def setUp(self):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        self.site = Path(temp.name)
+        self.site = Path(temp.name).resolve()
         self.root = self.site / "iPod"
         self.device = mock_device(self.root)
 

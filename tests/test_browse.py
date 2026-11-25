@@ -20,7 +20,7 @@ class BrowseTests(unittest.TestCase):
     def setUp(self):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        self.site = Path(temp.name)
+        self.site = Path(temp.name).resolve()
         self.root = self.site / "iPod"
         device = mock_device(self.root)
         sources = []
