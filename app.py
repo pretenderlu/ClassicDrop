@@ -26,6 +26,7 @@ from coverflow import CoverFlow
 from device_identity import describe
 import diagnostics
 import encoders
+import mac_update
 from import_dialog import AUDIO_TYPES, ImportDialog, NewPlaylist, playlist_targets
 import theme
 from library import (DB, Device, editable_playlist, is_music, listening, move_playlist_entries, playlist_edit, rename_device,
@@ -1740,13 +1741,28 @@ class App:
                     report(f"正在下载更新 {done / 2**20:.1f} MB · {share}%" if total
                            else f"正在下载更新 {done / 2**20:.1f} MB")
             try:
-                return download_update(info, destination, progress)
+                package = download_update(info, destination, progress)
+                if system.MAC:
+                    return mac_update.prepare(package, info.version, report)
+                return package
             except Exception as exc:
                 return exc
         self._work(f"正在下载更新 {info.version}…", work, self._install_update)
 
     def _install_update(self, installer):
         info = self.latest_update
+        if system.MAC and not isinstance(installer, Exception):
+            if installer[0] == "manual":
+                subprocess.Popen(["open", str(installer[1])])
+                self.status.set("已打开更新包。请把新版 ClassicDrop 拖到「应用程序」文件夹替换旧版。")
+                return
+            try:
+                mac_update.launch_swap(installer[1], installer[2], system.LOGS / "update.log")
+            except OSError as exc:
+                installer = exc
+            else:
+                self.close()  # normal close flushes pending ratings; the helper swaps once we exit
+                return
         if not isinstance(installer, Exception):
             self.status.set("更新包校验完成，正在安装…")
             try:

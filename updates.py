@@ -5,6 +5,7 @@ import json
 import os
 import platform
 import re
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +36,17 @@ def issue_url(device=""):
 
 
 INSTALLER = re.compile(r"ClassicDropSetup-[\w.\-]+\.exe")
+MAC_DMG = re.compile(r"ClassicDrop-macOS-(arm64|x64)-[\w.\-]+\.dmg")
+
+
+def mac_arch():
+    """Hardware arch for the DMG choice: Apple Silicon even when the app runs under Rosetta."""
+    try:
+        out = subprocess.run(["sysctl", "-n", "hw.optional.arm64"], capture_output=True,
+                             timeout=10, text=True, **system.NO_WINDOW).stdout.strip()
+        return "arm64" if out == "1" else "x64"
+    except (OSError, subprocess.SubprocessError):
+        return "arm64" if platform.machine() == "arm64" else "x64"
 
 
 class UpdateError(RuntimeError):
@@ -117,9 +129,13 @@ def _update_info(payload, current_version):
     tag, url = str(payload.get("tag_name", "")), str(payload.get("html_url", ""))
     if not tag or not url.startswith("https://github.com/") or version_key(tag) <= version_key(current_version):
         return None
-    # The Windows installer is never offered on macOS; the Mac update flow is not built yet.
-    installer = {} if system.MAC else next((asset for asset in payload.get("assets") or []
-                      if INSTALLER.fullmatch(str(asset.get("name", "")))), {})
+    def match(asset):
+        name = str(asset.get("name", ""))
+        if system.MAC:
+            dmg = MAC_DMG.fullmatch(name)
+            return dmg and dmg.group(1) == mac_arch()
+        return INSTALLER.fullmatch(name)
+    installer = next((asset for asset in payload.get("assets") or [] if match(asset)), {})
     digest = str(installer.get("digest", "") or "")
     # Without GitHub's own checksum there is nothing to verify the download against, so only the page is offered.
     if not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", digest) or not str(

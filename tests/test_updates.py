@@ -74,6 +74,25 @@ class CheckTests(unittest.TestCase):
             self.assertEqual((info.download_url, info.sha256, info.installer_name), ("", "", ""))
             self.assertTrue(info.url.startswith("https://github.com/"))
 
+    def test_mac_picks_the_dmg_for_the_machine_arch(self):
+        dmg = {"name": "ClassicDrop-macOS-arm64-v9.9.9.dmg", "browser_download_url": "https://example.invalid/m.dmg",
+               "size": 20, "url": "https://api.example.invalid/asset/2", "digest": "sha256:" + DIGEST}
+        payload = release("v9.9.9")
+        payload["assets"].append(dmg)
+        with patch.object(system, "MAC", True), patch.object(updates, "mac_arch", return_value="arm64"),                 latest(payload):
+            info = check_for_updates("1.5.1")
+        self.assertEqual((info.download_url, info.installer_name, info.size, info.sha256),
+                         ("https://example.invalid/m.dmg", dmg["name"], 20, DIGEST))
+        # Under Rosetta the hardware is still Apple Silicon.
+        with patch.object(system, "MAC", True), patch.object(updates, "mac_arch", return_value="x64"),                 latest(payload):
+            info = check_for_updates("1.5.1")
+        self.assertEqual((info.download_url, info.installer_name), ("", ""))
+        # Missing or bad digest: only the page is offered, same as the Windows installer.
+        dmg["digest"] = "sha256:12"
+        with patch.object(system, "MAC", True), patch.object(updates, "mac_arch", return_value="arm64"),                 latest(payload):
+            info = check_for_updates("1.5.1")
+        self.assertEqual((info.download_url, info.installer_name), ("", ""))
+
     def test_same_older_draft_and_prerelease_are_ignored(self):
         for payload in (release("v1.5.1"), release("v1.5.0"), release("v9.9.9", prerelease=True),
                         release("v9.9.9", draft=True), release(""), ["unexpected"],

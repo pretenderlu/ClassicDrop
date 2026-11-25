@@ -12,12 +12,12 @@ from updates import PROJECT_URL, Release, UpdateError, UpdateInfo
 from version import __version__
 
 PAGE = "https://github.com/pretenderlu/ClassicDrop/releases/"
-OFFER_BUTTON = "打开下载页" if system.MAC else "下载并安装 v9.9.9"
+OFFER_BUTTON = "下载并安装 v9.9.9"
 PAGE_BUTTON = "打开下载页" if system.MAC else "打开发布页"
 NEWER = UpdateInfo("v9.9.9", PAGE + "v9.9.9",
-                   "" if system.MAC else "https://example.invalid/setup.exe",
-                   "" if system.MAC else "ClassicDropSetup-v9.9.9.exe", 0 if system.MAC else 100,
-                   "" if system.MAC else "a" * 64, "", "- 新增 **A**\n- 修复 B")
+                   "https://example.invalid/m.dmg" if system.MAC else "https://example.invalid/setup.exe",
+                   "ClassicDrop-macOS-arm64-v9.9.9.dmg" if system.MAC else "ClassicDropSetup-v9.9.9.exe", 100,
+                   "a" * 64, "", "- 新增 **A**\n- 修复 B")
 HISTORY = (Release("v9.9.9", PAGE + "v9.9.9", "2026-12-01", "· 新增 A\n· 修复 B"),
            Release("v" + __version__, PAGE + "current", "2026-11-25", "· 这一版的内容"),
            Release("v1.0.0", PAGE + "v1.0.0", "", ""))

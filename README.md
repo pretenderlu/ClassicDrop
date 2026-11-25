@@ -14,7 +14,7 @@ Windows 与 macOS 下的 iPod classic 原厂曲库工具。面向已经有原厂
 
 程序没有经过 Apple 签名与公证。macOS 15 上第一次打开会被拦下：先尝试打开一次，再到「系统设置 → 隐私与安全性」里点「仍要打开」；也可以在终端执行 `xattr -dr com.apple.quarantine /Applications/ClassicDrop.app`。macOS 还可能在连接 iPod 时询问是否允许访问可移动宗卷，请允许。
 
-数据和日志在 `~/Library/Application Support/ClassicDrop` 和 `~/Library/Logs/ClassicDrop`。编码器直接使用系统内置的 afconvert（Apple 自己的 ALAC/AAC 编码器），不需要安装任何组件。Mac 格式（HFS+）的 iPod 只能在 Mac 上使用。macOS 版本还没有在真机上完整验证过，请先少量传歌确认。
+程序位于可写文件夹（如「应用程序」）时，「下载并安装」会自动完成更新：下载对应机型的 DMG、校验 SHA-256、替换程序本体并重新打开；位于不可写位置或被移到隔离位置时，会打开 DMG 请你手动拖入替换。数据和日志在 `~/Library/Application Support/ClassicDrop` 和 `~/Library/Logs/ClassicDrop`。编码器直接使用系统内置的 afconvert（Apple 自己的 ALAC/AAC 编码器），不需要安装任何组件。Mac 格式（HFS+）的 iPod 只能在 Mac 上使用。macOS 版本还没有在真机上完整验证过，请先少量传歌确认。
 
 ## 支持的机型
 
