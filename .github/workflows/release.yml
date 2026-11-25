@@ -153,20 +153,6 @@ jobs:
       - name: Run tests
         run: python -m unittest discover -s tests -p "test_*.py" -v
 
-      - name: Capture main-window screenshots
-        continue-on-error: true
-        run: python tools/mac_screenshots.py "$RUNNER_TEMP/mac-shots"
-
-      - name: Upload macOS screenshots
-        if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@v7
-        with:
-          name: mac-screenshots-${{ matrix.arch }}
-          path: ${{ runner.temp }}/mac-shots/*.png
-          if-no-files-found: ignore
-          retention-days: 30
-
       - name: Build ClassicDrop.app and DMG
         run: bash build_mac.sh python
 
@@ -185,6 +171,21 @@ jobs:
           name: ClassicDrop-macOS-${{ matrix.arch }}
           path: dist/ClassicDrop-macOS-${{ matrix.arch }}-*.dmg
           if-no-files-found: error
+          retention-days: 30
+
+      - name: Capture main-window screenshots
+        continue-on-error: true
+        timeout-minutes: 4
+        run: python tools/mac_screenshots.py "$RUNNER_TEMP/mac-shots"
+
+      - name: Upload macOS screenshots
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: mac-screenshots-${{ matrix.arch }}
+          path: ${{ runner.temp }}/mac-shots/*.png
+          if-no-files-found: ignore
           retention-days: 30
 
   draft-release:
