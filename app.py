@@ -1,6 +1,5 @@
 import ctypes
 import json
-import os
 import platform
 import plistlib
 from dataclasses import replace
@@ -35,15 +34,16 @@ from native_covers import device_covers, load_cover
 from transfer import STAGE, export_tracks, recover_interrupted, transfer
 from updates import PROJECT_URL, Release, check_for_updates, download_update, issue_url, plain_notes, release_history, version_key
 from version import __version__
-import winarch
+import cpuarch
+import system
 
-BACKUPS = Path(os.environ["LOCALAPPDATA"]) / "ClassicDrop" / "Backups"
+BACKUPS = system.DATA / "Backups"
 SETTINGS = BACKUPS.with_name("settings.json")
+MOD = "Command" if system.MAC else "Control"
 
 
 def discover():
-    return [Path(d) for d in os.listdrives() if ctypes.windll.kernel32.GetDriveTypeW(d) in (2, 3)
-            and (Path(d) / DB).is_file()]
+    return [d for d in system.volumes() if (d / DB).is_file()]
 
 
 class App:
@@ -251,14 +251,18 @@ class App:
         self.tree.bind("<Button-1>", self._rating_click)
         self.tree.bind("<Motion>", self._rating_hover)
         self.tree.bind("<Leave>", lambda _: self._rating_hover(None))
-        self.tree.bind("<Button-3>", self.context_click)
+        if system.MAC:
+            self.tree.bind("<Button-2>", self.context_click)
+            self.tree.bind("<Control-Button-1>", self.context_click)
+        else:
+            self.tree.bind("<Button-3>", self.context_click)
         self.tree.bind("<Double-1>", lambda _: self.edit_pending() if self.view == "queue" else self.edit_tags())
-        self.tree.bind("<Control-a>", self.select_all)
+        self.tree.bind(f"<{MOD}-a>", self.select_all)
         self.tree.bind("<Delete>", self.delete_key)
         self.tree.bind("<<TreeviewSelect>>", self._picked)
-        w.bind("<Control-f>", lambda _: self.find.focus_set())
-        w.bind("<Control-o>", lambda _: self.pick_files())
-        w.bind("<Control-Return>", lambda _: self.send())
+        w.bind(f"<{MOD}-f>", lambda _: self.find.focus_set())
+        w.bind(f"<{MOD}-o>", lambda _: self.pick_files())
+        w.bind(f"<{MOD}-Return>", lambda _: self.send())
         w.bind("<F5>", lambda _: self.refresh())
         w.bind("<F2>", lambda _: self.change_device_name())
         for item in (w, self.tree, self.empty):
@@ -673,7 +677,7 @@ class App:
             device = device or Device.open(folder, guid)
             # Asking a sleeping disk for its free space can take seconds, so it is done here, off the interface.
             try:
-                covers.append(shutil.disk_usage(device.root) if device.root == Path(device.root.anchor) else None)
+                covers.append(shutil.disk_usage(device.root) if system.is_volume_root(device.root) else None)
             except OSError:
                 covers.append(None)
             small, large = device_covers(device)
@@ -916,8 +920,8 @@ class App:
         self.device_picture.configure(image=self.players[look])
         self.device_model.configure(text=describe(player) + ("\n尚未真机验证" if player and not player.proven else ""))
         if dev:
-            on_drive = dev.root == Path(dev.root.anchor)
-            self.device_info.configure(text=dev.root.drive if on_drive else dev.root.name)
+            on_drive = system.is_volume_root(dev.root)
+            self.device_info.configure(text=dev.root.drive if on_drive and system.WINDOWS else dev.root.name)
             self.device_badge.configure(text="可写入" if dev.guid else "只读", bg=theme.OK_FILL if dev.guid else theme.WARN_FILL,
                                         fg=theme.OK_TEXT if dev.guid else theme.WARN_TEXT)
             self.device_badge.pack(side="left", padx=self.px(0, 6), before=self.device_info)
@@ -1428,7 +1432,7 @@ class App:
         menu.add_command(label="补齐设备封面", command=self.repair_covers, state=music_state)
         menu.add_separator()
         menu.add_command(label="打开电脑上的曲库索引备份", state="normal" if BACKUPS.is_dir() else "disabled",
-                         command=lambda: os.startfile(BACKUPS))
+                         command=lambda: system.open_folder(BACKUPS))
         def enter_guid():
             value = simpledialog.askstring("设备校验", "输入这台 iPod 的 16 位十六进制 FireWire GUID", parent=self.window)
             if value:
@@ -1467,6 +1471,10 @@ class App:
     def apple_encoders(self):
         """Offer Apple's CoreAudioToolbox encoder, fetched from Apple's iTunes installer, or remove ours."""
         if self.busy:
+            return
+        if system.MAC:
+            messagebox.showinfo("Apple 编码器",
+                                "使用 macOS 内置的 Apple 编码器转换 ALAC 和 AAC，无需安装其他组件。", parent=self.window)
             return
         def checked(_):
             encoders.refresh()
@@ -1575,7 +1583,7 @@ class App:
         foot.pack(fill="x", pady=px(14, 0))
         def show_logs(_):
             diagnostics.LOGS.mkdir(parents=True, exist_ok=True)
-            os.startfile(diagnostics.LOGS)
+            system.open_folder(diagnostics.LOGS)
         logs = tk.Label(foot, text="打开日志文件夹", bg=theme.SURFACE, fg=theme.BLUE, cursor="hand2",
                         font=(theme.FONT, 10, "underline"))
         logs.pack(side="left")
@@ -1709,7 +1717,7 @@ class App:
                     self.download_update()
                 else:
                     webbrowser.open(info.url, new=2)
-            ttk.Button(self.version_buttons, text=f"下载并安装 {info.version}" if info.download_url else "打开发布页",
+            ttk.Button(self.version_buttons, text=f"下载并安装 {info.version}" if info.download_url else ("打开下载页" if system.MAC else "打开发布页"),
                        style="Accent.TButton", command=accept).pack(side="left", padx=self.px(8, 0))
 
     def download_update(self):
@@ -1762,12 +1770,15 @@ def main():
     if sys.argv[1:2] == ["--self-test"]:
         from selftest import self_test
         sys.exit(self_test(Path(sys.argv[2])))
-    ctypes.windll.user32.SetProcessDPIAware()
+    if system.WINDOWS:
+        ctypes.windll.user32.SetProcessDPIAware()
     diagnostics.setup()
-    diagnostics.log.info("ClassicDrop %s 启动 · Windows %s（%s） · 架构 %s",
-                         __version__, platform.release(), platform.version(), winarch.describe())
+    os_name = f"macOS {platform.mac_ver()[0]}" if system.MAC else f"Windows {platform.release()}（{platform.version()}）"
+    diagnostics.log.info("ClassicDrop %s 启动 · %s · 架构 %s", __version__, os_name, cpuarch.describe())
     window = TkinterDnD.Tk()
     app = App(window, browse="album", settings=SETTINGS, check_updates=True)
+    if system.MAC:
+        window.createcommand("tk::mac::Quit", app.close)
     paths = [Path(value) for value in sys.argv[1:]]
     folder = next((p for p in paths if p.is_dir() and (p / "iPod_Control/iTunes").is_dir()), None)
     sources = [p for p in paths if p != folder]

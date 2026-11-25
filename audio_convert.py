@@ -12,6 +12,7 @@ from pathlib import Path
 from imageio_ffmpeg import get_ffmpeg_exe
 import diagnostics
 import encoders
+import system
 from mutagen.dsdiff import DSDIFF, DSDIFFFile
 from mutagen.dsf import DSF, DSFFile
 from mutagen.easymp4 import EasyMP4
@@ -297,7 +298,7 @@ def _unstamp(destination):
 
 def _ffmpeg(arguments):
     process = subprocess.run([get_ffmpeg_exe(), "-nostdin", "-hide_banner", "-loglevel", "error", "-xerror", *arguments],
-                             stdin=subprocess.DEVNULL, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                             stdin=subprocess.DEVNULL, capture_output=True, **system.NO_WINDOW)
     if process.returncode:
         raise ValueError("处理音频失败。\n" + process.stderr.decode("utf8", "replace").strip()[-900:])
     return process.stdout.strip()
@@ -386,7 +387,24 @@ def _convert(source, mode, destination):
             exe, env = bundle
             candidates.append(("refalac", exe, env, raw_args, raw_format))
     done = False
+    if encoders.afconvert():
+        if mode == "aac":
+            af_args, pcm = (["-f", "m4af", "-d", "aac", "-b", "256000" if channels == 2 else "128000",
+                             "-s", "2", "-q", "127"], "pcm_f32le")
+        else:
+            af_args, pcm = ["-f", "m4af", "-d", "alac"], "pcm_s24le" if bits == 24 else "pcm_s16le"
+        try:
+            encoders.afconvert_encode(af_args, decode, pcm, destination)
+            _unstamp(destination)
+        except Exception as exc:
+            destination.unlink(missing_ok=True)
+            diagnostics.log.warning("afconvert %s 编码失败，改用下一种编码器。%s", mode.upper(), exc)
+        else:
+            diagnostics.log.info("afconvert %s 编码：%s", mode.upper(), source.name)
+            done = True
     for label, exe, env, tool_args, raw in candidates:
+        if done:
+            break
         try:
             encoders.pipe_encode(exe, env, tool_args, decode, raw, destination)
             _unstamp(destination)
