@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import tempfile
 from contextlib import ExitStack, contextmanager
 from ctypes import wintypes
@@ -17,7 +18,7 @@ from iPodDB.library import WriteResources
 from library import (DB, MUSIC, STAGE, delete_playlist, fingerprint, inside, is_music, playlist_edit, prepared_database,
                      select_additions, validate_playlist_name, without_music, write_file)
 from native_covers import prepare_covers, publish_covers, settle_covers
-from library import with_listening
+from library import PLAY_COUNTS, with_listening
 from removal import merge_receipt
 from removal import GENIUS, genius_source, checked_receipt, quarantine, removal_receipt, settle_removal
 
@@ -80,6 +81,17 @@ def _stage_file(device, name):
     return inside(device.root, f"{STAGE}/{name}")
 
 
+def _retire_play_counts(device, digest):
+    """Remove the Play Counts file whose stars and plays the committed library now contains.
+
+    A file with other content was written by the iPod since then and is left alone.
+    """
+    file = inside(device.root, PLAY_COUNTS)
+    if file.is_file() and fingerprint(file) == digest:
+        file.chmod(stat.S_IWRITE)
+        file.unlink()
+
+
 def recover(device, backups=None):
     """Under the device lock, settle an interrupted batch against the actual DB."""
     folder = inside(device.root, STAGE)
@@ -125,6 +137,8 @@ def recover(device, backups=None):
                     removals.append(candidate)
             for file in removals:
                 file.unlink()
+        if plan.get("counts") and current == plan["after"]:
+            _retire_play_counts(device, plan["counts"])
     elif _stage_file(device, "media.part").exists() or _stage_file(device, "new.db").exists():
         raise ValueError(f"缺少传输记录，已保留暂存文件：{folder}")
     if covers:
@@ -167,6 +181,13 @@ def transfer(device, files, backups, report=lambda _: None, *, desired=None, rem
                 raise ValueError("有曲目已不在当前曲库中。请刷新后再操作。")
             desired = replace(device.library.snapshot, tracks=tuple(
                 replace(t, rating=ratings[t.track_id]) if t.track_id in ratings else t for t in device.library.snapshot.tracks))
+        if (files or repair_covers) and not ratings:
+            # New songs are appended to the library as the iPod itself shows it, so that stars and plays
+            # recorded on the iPod survive the transfer. Records that cannot be read are left alone.
+            try:
+                device, counts = with_listening(device)
+            except ValueError:
+                pass
         before = device.library.snapshot
         if removed:
             desired = without_music(before, removed)
@@ -220,7 +241,7 @@ def transfer(device, files, backups, report=lambda _: None, *, desired=None, rem
         if counts is not None:
             old_counts = hashlib.sha256(counts).hexdigest()
             backup_bytes(backup_dir / ("Play Counts-" + old_counts), counts, old_counts)
-        if removed or counts is not None:
+        if removed or (counts is not None and ratings):
             if genius and genius[0] != genius[1]:
                 old_genius = hashlib.sha256(genius[0]).hexdigest()
                 backup_bytes(backup_dir / (GENIUS + "-" + old_genius), genius[0], old_genius)
@@ -243,6 +264,8 @@ def transfer(device, files, backups, report=lambda _: None, *, desired=None, rem
                 digest = hashlib.sha256(payload).hexdigest()
                 backup_bytes(backup_dir / f"covers-{digest}.json", payload, digest)
                 plan.update(version=3, receipt=digest)
+            if counts is not None:
+                plan["counts"] = old_counts
         folder = inside(device.root, STAGE)
         folder.mkdir()
         try:

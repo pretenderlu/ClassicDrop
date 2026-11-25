@@ -5,12 +5,13 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from test_classicdrop import FIXTURES, GUID, Device, mock_device
+from test_classicdrop import FIXTURES, GUID, MUSIC, Device, mock_device
 from test_native_covers import covered_m4a
 import app
 from iPodDB.iTunesDB.writer.signature import verify_hash58
 from library import DB, PLAY_COUNTS, STAGE, listening
-from transfer import transfer
+from library import playlist_edit
+from transfer import recover_interrupted, transfer
 
 
 def write_play_counts(root, rows, width=28):
@@ -45,10 +46,10 @@ class ListeningTests(unittest.TestCase):
         # Reading changes neither the file nor the library that is used for writing.
         self.assertEqual(file.read_bytes(), recorded)
         self.assertEqual([(t.rating, t.play_count) for t in self.device.library.snapshot.tracks], [(0, 0)] * 3)
-        # Rows written before more songs arrived still belong to the first tracks.
+        # Adding a song merges the records into the library and retires the file.
         transfer(self.device, [covered_m4a(self.site / "new.m4a")], self.site / "backups")
         self.device = Device.open(self.root)
-        self.assertEqual((file.read_bytes(), len(self.device.library.snapshot.tracks)), (recorded, 4))
+        self.assertEqual((file.exists(), len(self.device.library.snapshot.tracks)), (False, 4))
         self.assertEqual(sorted(listening(self.device).values()), [(0, 0), (0, 0), (50, 1), (100, 3)])
 
     def test_unusable_records_fall_back_to_the_library(self):
@@ -145,3 +146,47 @@ class RatingTests(ListeningTests):
         with self.assertRaisesRegex(ValueError, "无法合并 iPod 上的播放记录"):
             self.rate({0: 60})
         self.assertEqual(((self.root / DB).read_bytes(), (self.root / STAGE).exists()), (before, False))
+
+
+class TransferMergeTests(ListeningTests):
+    def heard_now(self):
+        self.device = Device.open(self.root)
+        return [(t.rating, t.play_count) for t in self.device.library.snapshot.tracks]
+
+    def test_adding_songs_merges_the_ipods_records(self):
+        file = write_play_counts(self.root, [(3, 100), (0, None), (1, 50)])
+        recorded = file.read_bytes()
+        transfer(self.device, [covered_m4a(self.site / "new.m4a")], self.site / "backups", new_playlist_name="路上")
+        self.assertEqual(self.heard_now(), [(100, 3), (0, 0), (50, 1), (0, 0)])
+        self.assertFalse(file.exists() or (self.root / STAGE).exists())
+        self.assertTrue(verify_hash58(self.device.original, GUID))
+        self.assertGreater(self.device.library.snapshot.tracks[3].artwork_id, 0)
+        saved, = (self.site / "backups").rglob("Play Counts-*")
+        self.assertEqual(saved.read_bytes(), recorded)
+        # Nothing is counted twice by the next transfer.
+        transfer(self.device, [covered_m4a(self.site / "more.m4a", "blue")], self.site / "backups")
+        self.assertEqual(self.heard_now(), [(100, 3), (0, 0), (50, 1), (0, 0), (0, 0)])
+
+    def test_interrupted_transfer_keeps_library_records_and_music(self):
+        file = write_play_counts(self.root, [(3, 100), (0, None), (1, 50)])
+        before = (self.root / DB).read_bytes(), file.read_bytes()
+        def interrupt(message):
+            if message == "提交曲库…":
+                raise SystemExit
+        with self.assertRaises(SystemExit):
+            transfer(self.device, [covered_m4a(self.site / "new.m4a")], self.site / "backups", report=interrupt)
+        recover_interrupted(self.device, self.site / "backups")
+        self.assertEqual(((self.root / DB).read_bytes(), file.read_bytes()), before)
+        self.assertEqual((len([p for p in (self.root / MUSIC).rglob("*") if p.is_file()]), (self.root / STAGE).exists()), (3, False))
+
+    def test_unreadable_records_and_other_edits_leave_the_file(self):
+        file = self.root / PLAY_COUNTS
+        file.write_bytes(b"not a play counts file")
+        transfer(self.device, [covered_m4a(self.site / "new.m4a")], self.site / "backups")
+        self.assertEqual((len(self.heard_now()), file.read_bytes()), (4, b"not a play counts file"))
+        recorded = write_play_counts(self.root, [(3, 100)] * 4).read_bytes()
+        snapshot = self.device.library.snapshot
+        transfer(self.device, [], self.site / "backups", desired=playlist_edit(snapshot, [snapshot.tracks[0].track_id], name="歌单"))
+        self.assertEqual((self.heard_now(), file.read_bytes()), ([(0, 0)] * 4, recorded))
+        transfer(self.device, [], self.site / "backups", remove_ids=[self.device.library.snapshot.tracks[3].track_id])
+        self.assertTrue(file.exists())
