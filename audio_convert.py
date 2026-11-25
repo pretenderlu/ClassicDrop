@@ -10,6 +10,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from imageio_ffmpeg import get_ffmpeg_exe
+import diagnostics
+import encoders
 from mutagen.dsdiff import DSDIFF, DSDIFFFile
 from mutagen.dsf import DSF, DSFFile
 from mutagen.easymp4 import EasyMP4
@@ -264,6 +266,35 @@ def _metadata(source, audio, destination):
         tagged.save()
 
 
+def _unstamp(destination):
+    """External encoders stamp wall-clock creation/modification times into mvhd/tkhd/mdhd,
+    which would make every conversion hash differently; zero them like FFmpeg's bitexact mode."""
+    stamped = {b"mvhd", b"tkhd", b"mdhd"}
+    containers = {b"moov", b"trak", b"mdia", b"minf", b"stbl", b"udta", b"edts"}
+    data = bytearray(destination.read_bytes())
+    def walk(start, end):
+        while start + 8 <= end:
+            size = int.from_bytes(data[start:start + 4], "big")
+            kind = bytes(data[start + 4:start + 8])
+            head = 8
+            if size == 1:
+                size = int.from_bytes(data[start + 8:start + 16], "big")
+                head = 16
+            elif size == 0:
+                size = end - start
+            if size < head or start + size > end:
+                break
+            if kind in stamped:
+                wide = data[start + head] == 1
+                for at in (start + head + 4, start + head + (12 if wide else 8)):
+                    data[at:at + (8 if wide else 4)] = b"\0" * (8 if wide else 4)
+            elif kind in containers:
+                walk(start + head, start + size)
+            start += size
+    walk(0, len(data))
+    destination.write_bytes(data)
+
+
 def _ffmpeg(arguments):
     process = subprocess.run([get_ffmpeg_exe(), "-nostdin", "-hide_banner", "-loglevel", "error", "-xerror", *arguments],
                              stdin=subprocess.DEVNULL, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
@@ -331,10 +362,46 @@ def _convert(source, mode, destination):
     decoder = ["-c:a", info.pcm_decoder] if hasattr(info, "pcm_decoder") else []
     # Bound the stereo mix before encoding multichannel DSD, including the floating-point AAC path.
     downmix = ["-af", f"aresample={rate}:ochl=stereo:rematrix_maxval=1"] if suffix in DSD_FILES and info.channels > 2 else []
-    _ffmpeg(["-n", "-protocol_whitelist", "file", *decoder, "-i", str(source), "-map", "0:a:0", "-vn", "-sn", "-dn",
-             "-map_metadata", "0", "-map_chapters", "-1", "-metadata", "creation_time=",
-             *downmix, *codec, "-ar", str(rate), "-ac", str(channels), "-threads:a", "1", "-fflags", "+bitexact",
-             "-flags:a", "+bitexact", "-f", "ipod", str(destination)])
+    decode = [*decoder, "-i", str(source), "-map", "0:a:0", "-vn", "-sn", "-dn",
+              *downmix, "-ar", str(rate), "-ac", str(channels), "-threads:a", "1",
+              "-fflags", "+bitexact", "-flags:a", "+bitexact"]
+    candidates = []
+    if mode == "aac":
+        apple = encoders.qaac()
+        if apple:
+            exe, env = apple
+            candidates.append((f"qaac --cvbr {256 if channels == 2 else 128}", exe, env,
+                               ["--cvbr", "256" if channels == 2 else "128", "--raw", "--raw-format", "F32L",
+                                "--raw-channels", str(channels), "--raw-rate", str(rate), "--silent"], "f32le"))
+    else:
+        raw_format, raw_name = ("s24le", "S24L") if bits == 24 else ("s16le", "S16L")
+        raw_args = ["--raw", "--raw-format", raw_name, "--raw-channels", str(channels),
+                    "--raw-rate", str(rate), "--silent"]
+        apple = encoders.qaac()
+        if apple:
+            exe, env = apple
+            candidates.append(("qaac -A", exe, env, ["-A", *raw_args], raw_format))
+        bundle = encoders.refalac()
+        if bundle:
+            exe, env = bundle
+            candidates.append(("refalac", exe, env, raw_args, raw_format))
+    done = False
+    for label, exe, env, tool_args, raw in candidates:
+        try:
+            encoders.pipe_encode(exe, env, tool_args, decode, raw, destination)
+            _unstamp(destination)
+        except Exception as exc:
+            destination.unlink(missing_ok=True)
+            diagnostics.log.warning("%s 编码失败，改用下一种编码器。%s", label, exc)
+            continue
+        diagnostics.log.info("%s 编码：%s", label, source.name)
+        done = True
+        break
+    if not done:
+        _ffmpeg(["-n", "-protocol_whitelist", "file", *decoder, "-i", str(source), "-map", "0:a:0", "-vn", "-sn", "-dn",
+                 "-map_metadata", "0", "-map_chapters", "-1", "-metadata", "creation_time=",
+                 *downmix, *codec, "-ar", str(rate), "-ac", str(channels), "-threads:a", "1", "-fflags", "+bitexact",
+                 "-flags:a", "+bitexact", "-f", "ipod", str(destination)])
     _metadata(source, audio, destination)
     encoded = EasyMP4(destination).info
     want = "mp4a.40.2" if mode == "aac" else "alac"

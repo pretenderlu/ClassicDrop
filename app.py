@@ -26,6 +26,7 @@ from audio_convert import LABELS
 from coverflow import CoverFlow
 from device_identity import describe
 import diagnostics
+import encoders
 from import_dialog import AUDIO_TYPES, ImportDialog, NewPlaylist, playlist_targets
 import theme
 from library import (DB, Device, editable_playlist, is_music, listening, move_playlist_entries, playlist_edit, rename_device,
@@ -1231,6 +1232,8 @@ class App:
                 self.load(dev.root, value.strip())
         menu.add_command(label="填写设备 GUID", command=enter_guid,
                          state="normal" if dev and not dev.guid and not self.busy else "disabled")
+        menu.add_command(label="Apple 编码器", command=self.apple_encoders,
+                         state="disabled" if self.busy else "normal")
         menu.add_command(label="恢复中断操作",
                          command=lambda: self._work("核对中断记录…", lambda _: recover_interrupted(dev, BACKUPS),
                                                     lambda _: self.load(dev.root, dev.guid.hex(), "中断记录已处理。")),
@@ -1257,6 +1260,34 @@ class App:
             "仅在设备显示只读且已知本机标识时，需要手动填写 GUID。\n\n"
             f"电脑备份位置\n{BACKUPS}\n\n曲库引擎采用 iOpenPod。许可证为 GPL-3.0-or-later。", parent=self.window))
         menu.tk_popup(self.tools_button.winfo_rootx(), self.tools_button.winfo_rooty() + self.tools_button.winfo_height())
+
+    def apple_encoders(self):
+        """Offer Apple's CoreAudioToolbox encoder, fetched from Apple's iTunes installer, or remove ours."""
+        if self.busy:
+            return
+        def checked(_):
+            encoders.refresh()
+            return encoders.apple_version(), encoders.apple_source()
+        def done(result):
+            version, source = result
+            if version and source == "qtfiles":
+                if messagebox.askyesno("Apple 编码器",
+                                       f"Apple 编码器已启用（{version}）。转换 ALAC 和 AAC 时使用 Apple 的编码器。"
+                                       "要移除这些组件吗？", parent=self.window):
+                    encoders.remove_apple()
+                    self.status.set("已移除 Apple 编码器组件。")
+            elif version:
+                messagebox.showinfo("Apple 编码器",
+                                    f"正在使用电脑上已安装的 iTunes 提供的 Apple 编码器（{version}），"
+                                    "不需要另外下载。", parent=self.window)
+            elif messagebox.askyesno("Apple 编码器",
+                                     "转换 AAC 时可以改用 Apple 的编码器，音质更好。程序会从 Apple 官网下载 iTunes "
+                                     "安装包（约 200 MB），只提取编码器需要的组件（约 43 MB），不会安装 iTunes。要继续吗？",
+                                     parent=self.window):
+                self._work("正在下载 iTunes 安装包…", encoders.install_apple, installed)
+        def installed(version):
+            messagebox.showinfo("Apple 编码器", f"Apple 编码器已启用（{version}）。", parent=self.window)
+        self._work("正在检查 Apple 编码器…", checked, done)
 
     def check_updates(self, asked=False):
         """Look for a newer release without holding up the window. asked is True when the user chose the menu item."""

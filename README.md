@@ -1,10 +1,10 @@
-# ClassicDrop 1.5.6
+# ClassicDrop 1.5.7
 
 Windows x64 下的 iPod classic 原厂曲库工具。面向已经有原厂曲库的 IPC3（2009 年末 160 GB 薄款）。所有日常操作都在本地完成。iPod nano 第 3、4 代使用同一种曲库，也可以读写，但还没有在真机上验证过，见「支持的机型」。
 
 ## 安装与更新
 
-从 [Releases](https://github.com/pretenderlu/ClassicDrop/releases) 下载 `ClassicDropSetup-v1.5.6.exe` 并运行。程序装在 `%LOCALAPPDATA%\Programs\ClassicDrop`，安装和卸载都不需要管理员权限。同一页面的 `ClassicDrop-Windows-x64.zip` 是免安装版，解压后运行其中的 ClassicDrop.exe。
+从 [Releases](https://github.com/pretenderlu/ClassicDrop/releases) 下载 `ClassicDropSetup-v1.5.7.exe` 并运行。程序装在 `%LOCALAPPDATA%\Programs\ClassicDrop`，安装和卸载都不需要管理员权限。同一页面的 `ClassicDrop-Windows-x64.zip` 是免安装版，解压后运行其中的 ClassicDrop.exe。
 
 启动后程序会向 GitHub 查询最新的正式版本。窗口右下角有 GitHub 链接、「反馈」和当前版本号。点「反馈」会打开一个小窗口，列出诊断信息（软件版本、Windows 版本、iPod 机型、最近一次报错和最近的运行日志）供先过目，再复制到剪贴板并打开 GitHub 的新建 Issue 页面。运行日志存在 `%LOCALAPPDATA%\ClassicDrop\Logs`，最多 3 个文件、每个 1 MB，会自动轮替。日志里会记录歌曲文件名；设备序列号、FireWire GUID 和设备名称一律不写入，写日志和诊断信息前会被替换成「[已隐藏]」，你的用户文件夹显示为 `~`。点版本号可以查看各个版本的更新记录。有新版本时，版本号旁边会出现一个红点，更新记录里会多出「下载并安装」按钮。点它之后程序下载安装包，核对 GitHub 提供的 SHA-256 校验值，再自动安装并重新打开。正在传歌，或待传列表里还有歌曲时，需要先处理完再更新。也可以随时点「工具与备份 → 检查更新」。下载失败时可以重试，或打开发布页手动下载。查询只访问 GitHub 的发布接口，不上传任何曲库或设备信息。
 
@@ -41,7 +41,7 @@ nano 第 3、4 代的曲库格式和校验方式与 classic 相同。程序按�
 - **AAC-LC** 适合节省机内空间，输出 M4A。目标码率为立体声 256 kbps、单声道 128 kbps，实际码率随音源而变化。
 - **保留原文件格式** 默认用于 MP3 和 M4A（AAC-LC 或 ALAC），符合无损预设的 PCM WAV 也可以原样传入。原样传输支持单声道或双声道、最高 48 kHz。
 
-转码器随软件提供。确认传输后才开始准备音频，支持无 DRM 的本地文件。「保留原格式」保留音频编码。有标签或封面需要补全、修改时，程序在电脑上的临时副本写入这些信息，再将副本传入 iPod。源文件保留原样。
+转码器随软件提供。FFmpeg 负责全部解码（FLAC、WAV、DSD、重采样和混音）。编码时优先使用 Apple 品质的编码器：ALAC 使用随软件提供的 refalac（启用 Apple 组件时为 qaac），AAC 在启用 Apple 组件时使用 qaac，其余情况用 FFmpeg 编码。启用方法是「工具与备份 → Apple 编码器」：程序会从 Apple 官网下载 iTunes 安装包（约 200 MB），校验 Apple 签名后只提取编码器需要的组件（约 43 MB）到 `%LOCALAPPDATA%\ClassicDrop\QTfiles64`，不安装 iTunes；已安装 iTunes 时会直接使用其中的组件。同一菜单可以移除提取的组件。编码器失败会自动回退到 FFmpeg 并记入运行日志。确认传输后才开始准备音频，支持无 DRM 的本地文件。「保留原格式」保留音频编码。有标签或封面需要补全、修改时，程序在电脑上的临时副本写入这些信息，再将副本传入 iPod。源文件保留原样。
 
 带内嵌封面的歌曲传入时，ClassicDrop 会为 iPod 原厂播放界面生成缩略图，并把封面关联到对应的歌曲。FLAC、WAV、DSF 或 DFF 内嵌的 JPEG、PNG 封面也会随转码保存在 M4A 中，有多张时优先使用标记为正面的图片。
 
@@ -102,6 +102,7 @@ nano 第 3、4 代的曲库格式和校验方式与 classic 相同。程序按�
 ```powershell
 py -3.12 -m venv .venv
 .venv\Scripts\python -m pip install -r requirements-build.txt
+.venv\Scripts\python tools\fetch_qaac.py
 .venv\Scripts\python -m unittest discover -s tests -p "test_*.py" -v
 .\build.ps1 -Python .\.venv\Scripts\python.exe
 & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer\ClassicDrop.iss

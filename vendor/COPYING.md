@@ -63,3 +63,12 @@ recipients may also modify and redistribute the software under its terms.
 Binary distributors must satisfy the applicable source, notice, and other license
 requirements. A link to the project's current branch alone does not establish that
 the complete source corresponding to a particular binary is available.
+
+## Bundled encoders
+
+Windows packages bundle `qaac64.exe`, `refalac64.exe` and `libsoxr64.dll` from qaac
+(<https://github.com/nu774/qaac>), whose author placed it in the public domain. qaac and
+refalac contain ALAC encoder sources released by Apple under the Apache License 2.0 and
+parts of TagLib (LGPL). Apple's own CoreAudioToolbox and related DLLs are NOT distributed:
+they are fetched from Apple's official iTunes installer by the application only when the
+user asks, and stored under `%LOCALAPPDATA%\ClassicDrop\QTfiles64`.

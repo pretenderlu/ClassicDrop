@@ -37,6 +37,9 @@ jobs:
       - name: Install Python dependencies
         run: python -m pip install -r requirements-build.txt
 
+      - name: Fetch qaac/refalac encoders
+        run: python tools/fetch_qaac.py
+
       - name: Run tests
         # 托管 runner 的默认临时目录是 8.3 短路径（RUNNER~1），与程序解析出的长路径不一致，测试会误判为经过链接。
         env:
