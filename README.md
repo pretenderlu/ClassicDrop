@@ -1,12 +1,28 @@
-# ClassicDrop 1.5.1
+# ClassicDrop 1.5.2
 
-Windows x64 下的 iPod classic 原厂曲库工具。面向已经有原厂曲库的 IPC3（2009 年末 160 GB 薄款）。所有日常操作都在本地完成。
+Windows x64 下的 iPod classic 原厂曲库工具。面向已经有原厂曲库的 IPC3（2009 年末 160 GB 薄款）。所有日常操作都在本地完成。iPod nano 第 3、4 代使用同一种曲库，也可以读写，但还没有在真机上验证过，见「支持的机型」。
 
 ## 安装与更新
 
-从 [Releases](https://github.com/pretenderlu/ClassicDrop/releases) 下载 `ClassicDropSetup-v1.5.1.exe` 并运行。程序装在 `%LOCALAPPDATA%\Programs\ClassicDrop`，安装和卸载都不需要管理员权限。同一页面的 `ClassicDrop-Windows-x64.zip` 是免安装版，解压后运行其中的 ClassicDrop.exe。
+从 [Releases](https://github.com/pretenderlu/ClassicDrop/releases) 下载 `ClassicDropSetup-v1.5.2.exe` 并运行。程序装在 `%LOCALAPPDATA%\Programs\ClassicDrop`，安装和卸载都不需要管理员权限。同一页面的 `ClassicDrop-Windows-x64.zip` 是免安装版，解压后运行其中的 ClassicDrop.exe。
 
 启动后程序会向 GitHub 查询最新的正式版本。有新版本时，状态栏右侧出现「新版本」按钮，点开可以查看更新说明。选「是」后程序下载安装包，核对 GitHub 提供的 SHA-256 校验值，再自动安装并重新打开。正在传歌，或待传列表里还有歌曲时，需要先处理完再更新。也可以随时点「工具与备份 → 检查更新」。下载失败时可以重试，或打开发布页手动下载。查询只访问 GitHub 的发布接口，不上传任何曲库或设备信息。
+
+## 支持的机型
+
+| 机型 | 状态 |
+|---|---|
+| iPod classic | 在 2009 年末的 160 GB 薄款上实际使用 |
+| iPod nano 第 3 代（2007 年，宽屏） | 可读写，尚未真机验证 |
+| iPod nano 第 4 代（2008 年，竖长屏） | 可读写，尚未真机验证 |
+
+nano 第 3、4 代的曲库格式和校验方式与 classic 相同。程序按机型写入各自的封面缩略图：nano 第 3 代与 classic 一样是四种，nano 第 4 代是六种。这些依据来自 iOpenPod 的机型资料，开发时没有这两款真机。连接后，设备卡片会标出「尚未真机验证」。
+
+用 nano 测试时，第一次先传几首歌，弹出后在 iPod 上确认歌曲能看到、能播放、封面正常，再大量传入。每次改动前的曲库索引都会备份在电脑上，退回方法见「工具与备份」。最坏的情况下需要用 iTunes 恢复 iPod，这会清空机内的音乐。nano 能否播放 24 位的 ALAC 没有依据，不确定时在导入预览里选 AAC，或先试一首。
+
+测试结果欢迎到 [Issues](https://github.com/pretenderlu/ClassicDrop/issues) 反馈。请写明机型和颜色、容量、固件版本，以及歌曲、歌单和封面在 iPod 上是否正常。
+
+其他机型不在支持范围内。nano 第 1、2 代的曲库没有校验，程序会以只读方式打开，可以浏览和导出。nano 第 5 代及以后使用压缩曲库，程序会提示无法打开。
 
 ## 连接与传歌
 
@@ -77,7 +93,7 @@ Windows x64 下的 iPod classic 原厂曲库工具。面向已经有原厂曲库
 
 连接时，程序先读取设备上的 SysInfo。若未找到匹配的 GUID，会从当前盘符定位到物理磁盘，并沿 Windows 设备树读取 Apple USB 父设备的标识。只有通过这台 iPod 现有曲库的 Hash58 校验，界面才会显示「可写入」。仍显示只读时，可以在「填写设备 GUID」手动输入已知的 16 位十六进制 FireWire GUID。
 
-侧栏的设备卡片会显示这台 iPod 的代数和机身颜色，并配上对应的银色或黑色示意图。型号来自设备上的 SysInfo，或通过 USB 读取到的序列号。读取是只读操作。无法确定型号时显示中性的示意图，其余功能照常可用。
+侧栏的设备卡片会显示这台 iPod 的机型、代数和机身颜色，并配上对应外形和颜色的示意图。型号来自设备上的 SysInfo、通过 USB 读取到的序列号，或 USB 设备的产品编号。只有产品编号时能确定机型和代数，颜色显示为中性。设备上的文件与硬件报告的不一致时，以硬件为准。读取是只读操作。无法确定型号时显示中性的示意图，其余功能照常可用。
 
 ## 源码与构建
 

@@ -8,7 +8,7 @@ import ctypes
 import tkinter as tk
 from tkinter import ttk
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageColor, ImageDraw
 
 FONT = "Microsoft YaHei UI"
 THEMES = {"light": "浅色", "dark": "深色"}
@@ -47,29 +47,54 @@ PLAYERS = {  # body top, body bottom, edge, screen, wheel, wheel edge, centre bu
     "Silver": ("#f3f5f7", "#c6ccd4", "#a3acb7", "#1d2733", "#fbfcfd", "#c3cad3", "#d5dae1"),
     "Black": ("#45484e", "#191b1f", "#0c0d0f", "#07080a", "#2c2e33", "#4a4d53", "#121316"),
 }
+ANODISED = {"Blue": "#4a86c8", "Green": "#78b856", "Red": "#c2313b", "Pink": "#e0679b", "Purple": "#8559b8",
+            "Orange": "#ea8730", "Yellow": "#eac53a"}
+SHAPES = {  # width of an 800 tall drawing, corner radius, then the boxes of the screen, the wheel and its button
+    "classic": (480, 58, (52, 54, 427, 356), (84, 426, 395, 738), (186, 528, 293, 636)),
+    "nano3": (600, 64, (58, 58, 541, 404), (162, 460, 438, 736), (250, 548, 350, 648)),
+    "nano4": (344, 60, (38, 46, 305, 410), (54, 486, 290, 722), (130, 562, 214, 646)),
+}
 
 
-def player_image(height, finish=None):
-    """An iPod classic drawn in the given finish. None gives a neutral outline for an unknown or absent device."""
-    top, bottom, edge, screen, wheel, wheel_edge, centre = PLAYERS.get(finish) or (
+def _mix(colour, other, share):
+    return tuple(round(a + (b - a) * share) for a, b in zip(ImageColor.getrgb(colour), ImageColor.getrgb(other)))
+
+
+def _player_colours(finish):
+    if finish in PLAYERS:
+        return PLAYERS[finish]
+    if finish in ANODISED:
+        body = ANODISED[finish]
+        return (_mix(body, "white", 0.2), _mix(body, "black", 0.14), _mix(body, "black", 0.34), "#1d2733", "#fbfcfd",
+                _mix(body, "white", 0.5), _mix(body, "white", 0.72))
+    return None
+
+
+def player_image(height, finish=None, shape="classic"):
+    """An iPod drawn in the given finish. An unknown finish gives a neutral outline, as for an absent device."""
+    colours = _player_colours(finish)
+    top, bottom, edge, screen, wheel, wheel_edge, centre = colours or (
         BAR, SIDE, FIELD_LINE, FIELD_LINE, SURFACE, FIELD_LINE, SIDE)
-    w, h = 480, 800
+    w, radius, glass, ring, button = SHAPES[shape]
+    h = 800
     ramp = Image.linear_gradient("L").resize((w, h))
     body = Image.composite(Image.new("RGBA", (w, h), bottom), Image.new("RGBA", (w, h), top), ramp)
     mask = Image.new("L", (w, h), 0)
-    ImageDraw.Draw(mask).rounded_rectangle((6, 6, w - 7, h - 7), radius=58, fill=255)
+    ImageDraw.Draw(mask).rounded_rectangle((6, 6, w - 7, h - 7), radius=radius, fill=255)
     image = Image.new("RGBA", (w, h))
     image.paste(body, mask=mask)
     pen = ImageDraw.Draw(image)
-    pen.rounded_rectangle((6, 6, w - 7, h - 7), radius=58, outline=edge, width=12)
-    pen.rounded_rectangle((52, 54, w - 53, 356), radius=16, fill=screen)
-    if finish in PLAYERS:
+    pen.rounded_rectangle((6, 6, w - 7, h - 7), radius=radius, outline=edge, width=12)
+    pen.rounded_rectangle(glass, radius=16, fill=screen)
+    if colours:
         # A soft reflection across the glass.
+        left, upper, right, lower = glass
         gloss = Image.new("RGBA", (w, h))
-        ImageDraw.Draw(gloss).polygon(((52, 54), (300, 54), (120, 356), (52, 356)), fill=(255, 255, 255, 22))
+        ImageDraw.Draw(gloss).polygon(((left, upper), (left + round((right - left) * 0.66), upper),
+                                       (left + round((right - left) * 0.18), lower), (left, lower)), fill=(255, 255, 255, 22))
         image.alpha_composite(gloss)
-    pen.ellipse((84, 426, w - 85, 738), fill=wheel, outline=wheel_edge, width=8)
-    pen.ellipse((186, 528, w - 187, 636), fill=centre, outline=wheel_edge, width=6)
+    pen.ellipse(ring, fill=wheel, outline=wheel_edge, width=8)
+    pen.ellipse(button, fill=centre, outline=wheel_edge, width=6)
     return image.resize((round(height * w / h), height), Image.Resampling.LANCZOS)
 
 

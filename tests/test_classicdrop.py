@@ -23,12 +23,13 @@ GUID = bytes.fromhex("0011223344556677")
 FIXTURES = ROOT / "tests" / "fixtures"
 
 
-def mock_device(root):
+def mock_device(root, model=None):
+    """An empty signed library. model is the catalog number the device reports, such as MB754 for a nano."""
     (root / DB).parent.mkdir(parents=True)
     (root / MUSIC / "F00").mkdir(parents=True)
     info = root / "iPod_Control/Device/SysInfoExtended"
     info.parent.mkdir()
-    info.write_bytes(plistlib.dumps({"FireWireGUID": int.from_bytes(GUID, "big")}))
+    info.write_bytes(plistlib.dumps({"FireWireGUID": int.from_bytes(GUID, "big"), **({"ModelNumStr": model} if model else {})}))
     target = WriteTarget(checksum=WriteChecksum.HASH58, firewire_guid=GUID, database_version=0x30)
     prepared = create_empty_library("测试 iPod", target, supports_podcasts=True).prepared
     (root / DB).write_bytes(prepared.itunes)

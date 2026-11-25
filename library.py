@@ -1,4 +1,4 @@
-"""Read and edit a signed stock iPod classic music database."""
+"""Read and edit a signed stock music database of an iPod classic, or a third or fourth generation nano."""
 
 import ctypes
 import hashlib
@@ -125,7 +125,7 @@ def _ipod_usb_instance(disk_ids):
     ipod_disk = any(re.match(r"(USBSTOR|SCSI)\\DISK&VEN_APPLE&PROD_IPOD", v, re.I) for v in disk_ids)
     for node in disk_ids:
         apple = re.fullmatch(r"USB\\VID_05AC&PID_([0-9A-F]{4})\\[^\\]+", node, re.I)
-        if apple and (ipod_disk or apple[1] in ("1260", "1261")):
+        if apple and (ipod_disk or apple[1] in ("1260", "1261", "1262", "1263")):
             return node
     return None
 
@@ -165,7 +165,7 @@ class Device:
         path = inside(root, DB)
         compressed = inside(root, "iPod_Control/iTunes/iTunesCDB")
         if compressed.is_file() and compressed.stat().st_size:
-            raise ValueError("这是压缩曲库。此版本适用于使用 iTunesDB 的 iPod classic。")
+            raise ValueError("这是压缩曲库。此版本适用于使用 iTunesDB 的 iPod classic 和 nano 第 3、4 代。")
         if not path.is_file():
             raise ValueError("未找到原厂曲库。请选择包含 iPod_Control 的 iPod 根目录。")
         if not 108 <= path.stat().st_size <= MAX_DB:
@@ -181,7 +181,7 @@ class Device:
             raise ValueError("这个 GUID 与当前曲库校验不匹配。")
         usb_instance = _ipod_usb_instance(disk_ids)
         return cls(root, original, hashlib.sha256(original).hexdigest(), IPodLibrary(original), guid,
-                   usb_instance, identify(root, bool(usb_instance)))
+                   usb_instance, identify(root, usb_instance))
 
     def eject(self):
         if not self.usb_instance or self.root != Path(self.root.anchor):

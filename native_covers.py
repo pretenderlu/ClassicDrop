@@ -1,4 +1,4 @@
-"""Prepare and publish the cover thumbnails used by the stock iPod classic player."""
+"""Prepare and publish the cover thumbnails used by the stock player of each supported iPod."""
 
 import hashlib
 import os
@@ -20,9 +20,34 @@ from music_import import picture_data, thumbnail
 ART_DIR = "iPod_Control/Artwork"
 ART_DB = ART_DIR + "/ArtworkDB"
 SHARD = re.compile(r"iPod_Control/Artwork/F[0-9]+_[0-9]+\.ithmb", re.I)
+
+
+def cover_formats(artwork):
+    return tuple(CoverFormat(f.format_id, f.width, f.height, f.row_bytes, CoverPixelFormat(f.pixel_format.value))
+                 for f in artwork.cover_formats)
+
+
+# The classic and the third generation nano keep the same four thumbnails. The fourth generation nano keeps six.
 CLASSIC = DEFAULT_DEVICE_REGISTRY.profile_for_model_number("MC293").capabilities.artwork
-FORMATS = tuple(CoverFormat(f.format_id, f.width, f.height, f.row_bytes, CoverPixelFormat(f.pixel_format.value))
-                for f in CLASSIC.cover_formats)
+NANO_4 = DEFAULT_DEVICE_REGISTRY.profile_for_model_number("MB754").capabilities.artwork
+FORMATS = cover_formats(CLASSIC)
+# Each thumbnail number has one geometry, so reading can accept every layout without knowing the model.
+KNOWN_FORMATS = tuple({f.format_id: f for f in (*FORMATS, *cover_formats(NANO_4))}.values())
+
+
+def cover_layout(device, declared=frozenset()):
+    """The artwork rules for writing covers to this iPod.
+
+    The identified model decides. For an unidentified one, declared, the thumbnail numbers its own index
+    already lists, tells a fourth generation nano from the rest.
+    """
+    player = device.profile
+    if player and player.capabilities.artwork.cover_formats:
+        return player.capabilities.artwork
+    nano = {f.format_id for f in NANO_4.cover_formats}
+    if declared and declared <= nano and not declared <= {f.format_id for f in FORMATS}:
+        return NANO_4
+    return CLASSIC
 
 
 def load_cover(root, read):
@@ -45,7 +70,7 @@ def device_covers(device):
             return small, large
         library = device.library.with_artwork(index.read_bytes())
         for artwork_id in {t.artwork_id for t in library.snapshot.tracks}:
-            read = library.artwork_read(artwork_id, FORMATS, 128)
+            read = library.artwork_read(artwork_id, KNOWN_FORMATS, 128)
             if not read:
                 continue
             try:
@@ -57,7 +82,7 @@ def device_covers(device):
                 small[artwork_id] = Image.frombytes("RGB", (pixels.width, pixels.height), pixels.rgb888)
             except (OSError, ValueError):
                 continue
-            sharp = library.artwork_read(artwork_id, FORMATS, 320)
+            sharp = library.artwork_read(artwork_id, KNOWN_FORMATS, 320)
             if sharp and sharp != read:
                 large[artwork_id] = sharp
     except Exception:
@@ -163,15 +188,16 @@ def prepare_covers(device, additions, desired, paths, stack, report):
         return None, missing
 
     report(f"生成 {updated} 首歌曲的原厂封面缩略图…")
-    formats = FORMATS
-    if original:
-        declared = {row.chunk.header.format_id for row in parse_ArtworkDB(original).find_chunks(MhifHeader)}
-        if declared:
-            formats = tuple(f for f in FORMATS if f.format_id in declared)
-            if not formats:
-                raise ValueError("设备封面库使用的格式与 iPod classic 不匹配。")
+    declared = ({row.chunk.header.format_id for row in parse_ArtworkDB(original).find_chunks(MhifHeader)}
+                if original else set())
+    layout = cover_layout(device, declared)
+    formats = cover_formats(layout)
+    if declared:
+        formats = tuple(f for f in formats if f.format_id in declared)
+        if not formats:
+            raise ValueError("设备封面库使用的格式与这台 iPod 不匹配。")
     target = WriteTarget(checksum=WriteChecksum.HASH58, firewire_guid=device.guid, cover_formats=formats,
-                         artwork_root_value=CLASSIC.artwork_root_value, supports_sparse_artwork=CLASSIC.supports_sparse_artwork)
+                         artwork_root_value=layout.artwork_root_value, supports_sparse_artwork=layout.supports_sparse_artwork)
     if Path(tempfile.gettempdir()).resolve().is_relative_to(device.root):
         raise ValueError("处理封面需要电脑上的临时目录。")
     names = {name.casefold(): name for name in library.artwork_file_paths()}

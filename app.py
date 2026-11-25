@@ -128,7 +128,7 @@ class App:
         self.device_name.bind("<Double-1>", lambda _: self.change_device_name())
         state = tk.Frame(card, bg=theme.SURFACE)
         state.grid(row=1, column=1, sticky="ew", padx=px(10, 10))
-        self.device_model = tk.Label(card, bg=theme.SURFACE, fg=theme.MUTED, font=(theme.FONT, 8), anchor="w")
+        self.device_model = tk.Label(card, bg=theme.SURFACE, fg=theme.MUTED, font=(theme.FONT, 8), anchor="w", justify="left")
         self.device_model.grid(row=2, column=1, sticky="new", padx=px(10, 10), pady=px(2, 0))
         self.device_badge = tk.Label(state, font=(theme.FONT, 8), padx=px(6), pady=px(1))
         self.device_info = tk.Label(state, bg=theme.SURFACE, fg=theme.MUTED, font=(theme.FONT, 9))
@@ -451,6 +451,9 @@ class App:
             self.flow.forget()
             self.render()
             message = status or "曲库已读取。"
+            if not status and device.profile and not device.profile.proven:
+                message = (f"已读取 {device.profile.name} 的曲库。这个机型尚未经真机验证，"
+                           "每次改动前的曲库都会备份在电脑上，传歌后请在 iPod 上核对。")
             if not device.guid:
                 message = "当前为只读。可以浏览、导出，或在「工具与备份」填写设备 GUID。"
             if (device.root / STAGE).exists():
@@ -639,13 +642,14 @@ class App:
         generation = self.render_version
         dev = self.device
         snap = dev.library.snapshot if dev else None
-        self.device_name.configure(text=(snap.device_name or "iPod classic") if snap else "尚未连接")
+        player = dev.profile if dev else None
+        self.device_name.configure(text=(snap.device_name or (player.name if player else "iPod classic")) if snap else "尚未连接")
         usage = None
-        finish = dev.profile.finish if dev and dev.profile else None
-        if finish not in self.players:
-            self.players[finish] = ImageTk.PhotoImage(theme.player_image(self.px(56), finish), master=self.window)
-        self.device_picture.configure(image=self.players[finish])
-        self.device_model.configure(text=describe(dev.profile) if dev else "")
+        look = (player.finish or None, player.shape) if player else (None, "classic")
+        if look not in self.players:
+            self.players[look] = ImageTk.PhotoImage(theme.player_image(self.px(56), *look), master=self.window)
+        self.device_picture.configure(image=self.players[look])
+        self.device_model.configure(text=describe(player) + ("\n尚未真机验证" if player and not player.proven else ""))
         if dev:
             on_drive = dev.root == Path(dev.root.anchor)
             self.device_info.configure(text=dev.root.drive if on_drive else dev.root.name)
@@ -823,7 +827,8 @@ class App:
             ImportDialog(self.window, on_close=lambda result: self._finish_preview(initial, result),
                          paths=paths, initial=initial, known=self.pending, target=self.queue_target, new_playlist=new_playlist,
                          snapshot=dev.library.snapshot if dev else None,
-                         device_name=(dev.library.snapshot.device_name or "iPod classic") if writable else "")
+                         device_name=(dev.library.snapshot.device_name or (dev.profile.name if dev.profile else "iPod classic"))
+                         if writable else "")
         except Exception:
             self.window.attributes("-disabled", False)
             raise
@@ -1152,7 +1157,8 @@ class App:
         menu.add_cascade(label="主题", menu=looks, state="disabled" if self.busy else "normal")
         menu.add_command(label="检查更新", command=lambda: self.check_updates(asked=True))
         menu.add_command(label="使用说明", command=lambda: messagebox.showinfo(
-            "ClassicDrop " + __version__, "适用于 Windows 可读取的 iPod classic 原厂曲库。\n\n"
+            "ClassicDrop " + __version__, "适用于 Windows 可读取的 iPod classic 原厂曲库。iPod nano 第 3、4 代使用同一种曲库，也可以读写，"
+            "但尚未经真机验证。\n\n"
             "拖入歌曲或整个文件夹，在「导入预览」核对歌名、歌手、专辑和封面，也可多选一起修改。"
             "超过 24 位或 48 kHz 的音源和 DSF、DFF 统一转为 24 位 / 48 kHz ALAC。点「确认传入 iPod」，或先加入待传。"
             "在「传入位置」旁点「新建播放列表」，可以把本次传入的歌曲放进新歌单。传输完成后可点左侧「弹出设备」。\n\n"
