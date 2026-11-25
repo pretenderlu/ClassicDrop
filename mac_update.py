@@ -89,6 +89,11 @@ while [ $i -lt 600 ] && kill -0 "$1" 2>/dev/null; do
     i=$((i + 1))
     sleep 0.1 2>/dev/null || sleep 1
 done
+if kill -0 "$1" 2>/dev/null; then
+    rm -rf "$3"
+    echo "app still running; update skipped for $2"
+    exit 1
+fi
 old="$2.old.$$"
 if mv "$2" "$old" && mv "$3" "$2"; then
     rm -rf "$old"
