@@ -46,6 +46,11 @@ def discover():
     return [d for d in system.volumes() if (d / DB).is_file()]
 
 
+def _disabled(window):
+    # "-disabled" is a Windows-only wm attribute; macOS gets modality from grab_set() in the dialog.
+    return system.WINDOWS and window.attributes("-disabled")
+
+
 class App:
     def __init__(self, window, browse="all", settings=None, check_updates=False):
         """settings is the file that remembers the theme and browsing mode. Without it nothing is read or saved.
@@ -763,7 +768,7 @@ class App:
                 pass
 
     def set_theme(self, name):
-        if name == theme.CURRENT or name not in theme.THEMES or self.busy or self.window.attributes("-disabled"):
+        if name == theme.CURRENT or name not in theme.THEMES or self.busy or _disabled(self.window):
             return
         theme.use(name)
         self._remember()
@@ -1080,7 +1085,7 @@ class App:
                 self.add_files([folder])
 
     def drop_files(self, event):
-        if self.busy or self.window.attributes("-disabled"):
+        if self.busy or _disabled(self.window):
             return "refuse_drop"
         paths = self.window.tk.splitlist(event.data)
         # tkdnd runs idle callbacks inside the OLE drop. A timer lets Explorer finish the drag first.
@@ -1094,11 +1099,11 @@ class App:
         self.add_files((), initial=[self.pending[p] for p in paths], new_playlist=new_playlist)
 
     def add_files(self, paths, *, initial=(), new_playlist=False):
-        if self.busy or self.window.attributes("-disabled") or not (paths or initial):
+        if self.busy or _disabled(self.window) or not (paths or initial):
             return
         dev = self.device
         writable = dev and dev.guid
-        self.window.attributes("-disabled", True)
+        system.WINDOWS and self.window.attributes("-disabled", True)
         try:
             ImportDialog(self.window, on_close=lambda result: self._finish_preview(initial, result),
                          paths=paths, initial=initial, known=self.pending, target=self.queue_target, new_playlist=new_playlist,
@@ -1106,11 +1111,11 @@ class App:
                          device_name=(dev.library.snapshot.device_name or (dev.profile.name if dev.profile else "iPod classic"))
                          if writable else "")
         except Exception:
-            self.window.attributes("-disabled", False)
+            system.WINDOWS and self.window.attributes("-disabled", False)
             raise
 
     def _finish_preview(self, initial, result):
-        self.window.attributes("-disabled", False)
+        system.WINDOWS and self.window.attributes("-disabled", False)
         if result is None:
             return
         batch, target, direct = result
@@ -1541,7 +1546,7 @@ class App:
 
     def _can_update_now(self):
         """Installing closes the program, so it waits for work in progress and for songs still queued."""
-        if self.busy or self.window.attributes("-disabled"):
+        if self.busy or _disabled(self.window):
             messagebox.showwarning("无法更新", "请等待当前操作完成后再更新。", parent=self.window)
             return False
         if self.pending:

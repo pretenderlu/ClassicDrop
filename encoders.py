@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import wave
 from urllib.request import Request, urlopen
 
 from imageio_ffmpeg import get_ffmpeg_exe
@@ -103,13 +104,23 @@ def afconvert():
         return _afconvert_cache or None
     _afconvert_cache = ""
     if not system.WINDOWS and Path(AFCONVERT).is_file():
+        # Help-text wording differs between macOS versions, so probe by encoding a
+        # moment of silence to ALAC; success plus real output means usable.
         try:
-            formats = subprocess.run([AFCONVERT, "-hf"], capture_output=True, timeout=15,
-                                    **system.NO_WINDOW).stdout.decode("utf8", "replace")
+            with tempfile.TemporaryDirectory(prefix="classicdrop-") as folder:
+                src = Path(folder) / "probe.wav"
+                out = Path(folder) / "probe.m4a"
+                with wave.open(str(src), "wb") as wav:
+                    wav.setnchannels(1)
+                    wav.setsampwidth(2)
+                    wav.setframerate(44100)
+                    wav.writeframes(b"\0\0" * 4410)
+                probe = subprocess.run([AFCONVERT, "-f", "m4af", "-d", "alac", str(src), str(out)],
+                                       capture_output=True, timeout=15, **system.NO_WINDOW)
+                if probe.returncode == 0 and out.is_file() and out.stat().st_size:
+                    _afconvert_cache = AFCONVERT
         except (OSError, subprocess.TimeoutExpired):
-            formats = ""
-        if "m4af" in formats.casefold() and "alac" in formats.casefold():
-            _afconvert_cache = AFCONVERT
+            pass
     return _afconvert_cache or None
 
 
