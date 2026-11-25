@@ -13,6 +13,7 @@ from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4, MP4Cover
 from mutagen.wave import WAVE
 
+import system
 from audio_convert import ASK_FORMAT, READERS, lossless_profile, needs_48k_alac, riff_tags, source_audio, source_tags, tag_text
 
 FIELDS = ("title", "artist", "album")
@@ -135,6 +136,7 @@ def _folder_tags(path):
 def _folder_cover(folder):
     back = r"(?:^|[\W_])(?:back|rear|disc|cd)(?:$|[\W_\d])|封底"
     images = sorted((p for p in folder.iterdir() if p.suffix.lower() in PICTURES and p.is_file()
+                     and not system.junk_file(p.name)
                      and not re.search(back, p.stem, re.I)),
                     key=lambda p: (p.name.casefold(), p.name))
     names = ("cover", "folder", "front", "封面", "专辑封面", "專輯封面", "albumart", "album", folder.name.casefold())
@@ -286,11 +288,14 @@ def scan_inputs(inputs, known, report, cancelled):
                 if cancelled():
                     return songs, errors
                 subdirs[:] = sorted((d for d in subdirs if d.casefold() != "ipod_control"
+                                     and d not in system.JUNK_DIRS
                                      and not (directory / d).is_junction()), key=str.casefold)
                 for name in sorted(files, key=lambda s: [int(v) if v.isdecimal() else v.casefold() for v in re.split(r"(\d+)", s)]):
                     if cancelled():
                         return songs, errors
                     file = directory / name
+                    if system.junk_file(name):
+                        continue
                     if file.suffix.lower() in READERS and file.is_file():
                         read(file)
         elif path.suffix.lower() in READERS:

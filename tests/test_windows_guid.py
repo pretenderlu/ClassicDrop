@@ -8,7 +8,10 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from test_classicdrop import GUID, mock_device
-from library import _device_guids, _ipod_usb_instance, _windows_disk_ids
+import system
+from library import _device_guids, _ipod_usb_instance
+
+_windows_disk_ids = system._windows_disk_ids
 
 
 # Exercise the shipped PowerShell query against a synthetic PnP tree.
@@ -34,6 +37,7 @@ function Get-PnpDeviceProperty {
 """
 
 
+@unittest.skipUnless(system.WINDOWS, "Windows PnP tree and eject APIs")
 class WindowsGuidTests(unittest.TestCase):
     def test_guid_from_own_physical_usb_device(self):
         disk = r"USBSTOR\DISK&VEN_APPLE&PROD_IPOD\GENERIC&0"
@@ -55,14 +59,14 @@ class WindowsGuidTests(unittest.TestCase):
                                  env={**os.environ, "CLASSICDROP_TEST_PNP_CHAIN": json.dumps(chain)}, **kwargs)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     return result
-                with patch("library.subprocess.run", side_effect=simulated):
+                with patch("system.subprocess.run", side_effect=simulated):
                     ids = _windows_disk_ids("Q:")
                 self.assertEqual(list(filter(None, _device_guids(Path(__file__).parent, ids))), expected)
                 self.assertEqual(_ipod_usb_instance(ids), ejectable)
 
     def test_parent_timeout_keeps_disk_identifier(self):
         timeout = subprocess.TimeoutExpired("powershell", 12, output=(GUID.hex() + "\r\n").encode("ascii"))
-        with patch("library.subprocess.run", side_effect=timeout):
+        with patch("system.subprocess.run", side_effect=timeout):
             self.assertEqual(list(_device_guids(Path(__file__).parent, _windows_disk_ids("Q:"))), [GUID])
 
     def test_eject_verifies_disk_and_propagates_windows_veto(self):
@@ -70,7 +74,7 @@ class WindowsGuidTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             copy = mock_device(Path(tmp) / "iPod")
             dev = replace(copy, root=Path("Q:/"), guid=None, usb_instance=instance)
-            with patch("library._windows_disk_ids", return_value=(instance,)) as ids, patch("library.ctypes.WinDLL") as dll:
+            with patch("system._windows_disk_ids", return_value=(instance,)) as ids, patch("system.ctypes.WinDLL") as dll:
                 with self.assertRaisesRegex(ValueError, "USB"):
                     copy.eject()
                 ids.assert_not_called()

@@ -8,10 +8,11 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from PIL import Image
+import system
 from mutagen import MutagenError
 from device_registry import DEFAULT_DEVICE_REGISTRY
-import winarch
-winarch.import_wasmtime()
+import cpuarch
+cpuarch.import_wasmtime()
 from iPodDB.ArtworkDB.parser.parse_ArtworkDB import parse_ArtworkDB
 from iPodDB.ArtworkDB.shared.chunk_defs.mhif import MhifHeader
 from iPodDB.library import (ArtworkAsset, ArtworkPixels, CoverFormat, CoverPixelFormat, FileDependency, SourceFile,
@@ -205,6 +206,8 @@ def prepare_covers(device, additions, desired, paths, stack, report):
     names = {name.casefold(): name for name in library.artwork_file_paths()}
     if index.parent.exists():
         for path in index.parent.glob("*.ithmb"):
+            if system.junk_file(path.name):
+                continue
             name = path.relative_to(device.root).as_posix()
             names.setdefault(name.casefold(), name)
     inventory = {}

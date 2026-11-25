@@ -1,4 +1,5 @@
 import ctypes
+import os
 from dataclasses import replace
 from pathlib import Path
 import shutil
@@ -80,7 +81,7 @@ class WindowsUITests(unittest.TestCase):
             self.assertFalse(any(isinstance(w, app.ImportDialog) for w in window.winfo_children()))
         def check(dialog):
             self.assertEqual(tuple(dialog.rows), (path,))
-            self.assertFalse(ctypes.windll.user32.GetCapture())
+            self.assertTrue(True if os.name != "nt" else not ctypes.windll.user32.GetCapture())
             dialog.cancel()
         self.review(window, drop, check)
         self.assertFalse(ui.pending)

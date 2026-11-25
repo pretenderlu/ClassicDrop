@@ -35,6 +35,7 @@ def alac_codec(bits):
     return ["-c:a", "alac", "-sample_fmt", "s16p" if bits == 16 else "s32p", "-bits_per_raw_sample", str(bits)]
 
 
+@unittest.skipUnless(sys.platform == "win32", "qaac/refalac are Windows tools")
 class EncoderChainTests(unittest.TestCase):
     def setUp(self):
         temp = TemporaryDirectory()
@@ -110,7 +111,7 @@ class EncoderChainTests(unittest.TestCase):
         self.assertEqual(calls, [])
 
 
-@unittest.skipUnless(encoders.REFALAC.is_file(), "vendor/qaac/refalac64.exe not fetched")
+@unittest.skipUnless(sys.platform == "win32" and encoders.REFALAC.is_file(), "vendor/qaac/refalac64.exe not fetched")
 class RefalacIntegrationTests(unittest.TestCase):
     def setUp(self):
         temp = TemporaryDirectory()
@@ -180,6 +181,7 @@ def _png():
     return data.getvalue()
 
 
+@unittest.skipUnless(sys.platform == "win32", "Apple DLL install is Windows only")
 class InstallAppleTests(unittest.TestCase):
     def setUp(self):
         temp = TemporaryDirectory()

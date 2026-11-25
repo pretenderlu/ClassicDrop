@@ -16,30 +16,30 @@ from urllib.request import Request, urlopen
 
 from imageio_ffmpeg import get_ffmpeg_exe
 
+import system
 from version import __version__
 
 TOOLS = (Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).parent / "vendor") / "qaac"
 QAAC = TOOLS / "qaac64.exe"
 REFALAC = TOOLS / "refalac64.exe"
-QTFILES = Path(os.environ["LOCALAPPDATA"]) / "ClassicDrop" / "QTfiles64"
+QTFILES = system.DATA / "QTfiles64"
 
 ITUNES_URL = "https://www.apple.com/itunes/download/win64"
 # Everything qaac needs, found by its PE imports; icudt*.dll is matched by glob as its version changes.
 APPLE_DLLS = ("ASL.dll", "CoreAudioToolbox.dll", "CoreFoundation.dll", "objc.dll", "libdispatch.dll",
               "libicuin.dll", "libicuuc.dll", "msvcp140.dll", "vcruntime140.dll")
 
-_NO_WINDOW = subprocess.CREATE_NO_WINDOW
 _probe_cache = None
 
 
 def _powershell(command, timeout=120):
     ps = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
     return subprocess.run([str(ps), "-NoProfile", "-NonInteractive", "-Command", command],
-                          capture_output=True, timeout=timeout, creationflags=_NO_WINDOW)
+                          capture_output=True, timeout=timeout, **system.NO_WINDOW)
 
 
 def _run(args, error, timeout=900):
-    proc = subprocess.run([str(a) for a in args], capture_output=True, timeout=timeout, creationflags=_NO_WINDOW)
+    proc = subprocess.run([str(a) for a in args], capture_output=True, timeout=timeout, **system.NO_WINDOW)
     if proc.returncode:
         raise ValueError(error + f"（退出码 {proc.returncode}）")
 
@@ -53,7 +53,7 @@ def _run_check(folder):
         env["PATH"] = str(folder) + os.pathsep + env.get("PATH", "")
     try:
         proc = subprocess.run([str(QAAC), "--check"], capture_output=True, timeout=15,
-                              creationflags=_NO_WINDOW, env=env)
+                              **system.NO_WINDOW, env=env)
     except (OSError, subprocess.TimeoutExpired):
         return None
     match = re.search(r"CoreAudioToolbox\s+[\d.]+", (proc.stdout + proc.stderr).decode("utf8", "replace"))
@@ -92,6 +92,44 @@ def refresh():
     _probe_cache = None
 
 
+AFCONVERT = "/usr/bin/afconvert"
+_afconvert_cache = None  # not yet probed; "" means unusable
+
+
+def afconvert():
+    """Path to macOS's own Apple encoder when it can write ALAC/AAC m4a, else None."""
+    global _afconvert_cache
+    if _afconvert_cache is not None:
+        return _afconvert_cache or None
+    _afconvert_cache = ""
+    if not system.WINDOWS and Path(AFCONVERT).is_file():
+        try:
+            formats = subprocess.run([AFCONVERT, "-hf"], capture_output=True, timeout=15,
+                                    **system.NO_WINDOW).stdout.decode("utf8", "replace")
+        except (OSError, subprocess.TimeoutExpired):
+            formats = ""
+        if "m4af" in formats.casefold() and "alac" in formats.casefold():
+            _afconvert_cache = AFCONVERT
+    return _afconvert_cache or None
+
+
+def afconvert_encode(tool_args, decode_args, pcm_codec, destination):
+    """FFmpeg decodes to a temp CAF file; afconvert encodes it to m4a."""
+    with tempfile.TemporaryDirectory(prefix="classicdrop-") as folder:
+        caf = Path(folder) / "decode.caf"
+        decoder = subprocess.run([get_ffmpeg_exe(), "-nostdin", "-hide_banner", "-loglevel", "error",
+                                  "-xerror", *decode_args, "-c:a", pcm_codec, "-f", "caf", str(caf)],
+                                 capture_output=True, timeout=900, **system.NO_WINDOW)
+        if decoder.returncode:
+            detail = decoder.stderr.decode("utf8", "replace").strip()[-400:]
+            raise ValueError(f"FFmpeg 解码失败（退出码 {decoder.returncode}）。{detail}")
+        encoder = subprocess.run([AFCONVERT, *tool_args, str(caf), str(destination)],
+                                 capture_output=True, timeout=900, **system.NO_WINDOW)
+        if encoder.returncode:
+            detail = (encoder.stderr or encoder.stdout).decode("utf8", "replace").strip()[-400:]
+            raise ValueError(f"afconvert 编码失败（退出码 {encoder.returncode}）。{detail}")
+
+
 def qaac():
     """(exe, child env) when Apple's encoder is usable, else None."""
     if not apple_version():
@@ -115,10 +153,10 @@ def pipe_encode(exe, env, tool_args, decode_args, raw_format, destination):
     decoder = subprocess.Popen([get_ffmpeg_exe(), "-nostdin", "-hide_banner", "-loglevel", "error", "-xerror",
                                 *decode_args, "-f", raw_format, "pipe:1"],
                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               creationflags=_NO_WINDOW)
+                               **system.NO_WINDOW)
     encoder = subprocess.Popen([exe, *tool_args, "-", "-o", str(destination)],
                                stdin=decoder.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                               creationflags=_NO_WINDOW, env=env)
+                               **system.NO_WINDOW, env=env)
     decoder.stdout.close()
     encoder_error = encoder.communicate()[1]
     decoder.wait()

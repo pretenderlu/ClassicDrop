@@ -1,14 +1,11 @@
 """Read and edit a signed stock music database of an iPod classic, or a third or fourth generation nano."""
 
-import ctypes
 import hashlib
 import os
 import plistlib
 import re
-import subprocess
 import time
 from collections import defaultdict
-from ctypes import wintypes
 from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import uuid4
@@ -17,8 +14,9 @@ from xml.parsers.expat import ExpatError
 from device_identity import identify
 from audio_convert import lossless_profile, needs_48k_alac, source_audio, source_tags, tag_text
 
-import winarch
-winarch.import_wasmtime()  # under ARM64 emulation platform.machine() reports the host, not the x64 process
+import cpuarch
+import system
+cpuarch.import_wasmtime()  # under ARM64 emulation platform.machine() reports the host, not the x64 process
 
 from iPodDB.iTunesDB.writer.signature import verify_hash58
 from iPodDB.library.genius import reconcile_genius_playlists
@@ -94,38 +92,6 @@ def _device_guids(root, disk_ids):
         yield _guid(value.split("\\")[-1].split("&")[0])
 
 
-def _windows_disk_ids(drive):
-    if not re.fullmatch(r"[A-Z]:", drive, re.I):
-        return ()
-    query = f"""$v = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='{drive}'"\n""" + r"""
-$p = Get-CimAssociatedInstance -InputObject $v -Association Win32_LogicalDiskToPartition
-if (@($p).Count -ne 1 -or !$p) { return }
-$d = Get-CimAssociatedInstance -InputObject $p -Association Win32_DiskDriveToDiskPartition
-if (@($d).Count -ne 1 -or !$d) { return }
-$d.SerialNumber
-$d.PNPDeviceID
-$node = $d.PNPDeviceID
-if ($node -isnot [string]) { return }
-for ($hop = 0; $node -and $hop -lt 12; $hop++) {
-    if ($node -match '^USB\\VID_([0-9A-F]{4})&PID_[0-9A-F]{4}\\([^\\]+)$') {
-        if ($Matches[1] -eq '05AC') { $node }
-        break
-    }
-    $node = (Get-PnpDeviceProperty -InstanceId $node -KeyName 'DEVPKEY_Device_Parent' -ErrorAction SilentlyContinue).Data
-}
-"""
-    try:
-        ps = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
-        output = subprocess.run([str(ps), "-NoProfile", "-NonInteractive", "-Command", query],
-                                capture_output=True, timeout=12, creationflags=subprocess.CREATE_NO_WINDOW).stdout
-    except subprocess.TimeoutExpired as exc:
-        # The disk identifiers may already have arrived while Windows was resolving a parent.
-        output = exc.stdout or b""
-    except OSError:
-        return ()
-    return tuple(line.strip() for line in output.decode("ascii", "ignore").splitlines() if line.strip())
-
-
 def _ipod_usb_instance(disk_ids):
     ipod_disk = any(re.match(r"(USBSTOR|SCSI)\\DISK&VEN_APPLE&PROD_IPOD", v, re.I) for v in disk_ids)
     for node in disk_ids:
@@ -133,25 +99,6 @@ def _ipod_usb_instance(disk_ids):
         if apple and (ipod_disk or apple[1] in ("1260", "1261", "1262", "1263")):
             return node
     return None
-
-
-def _request_usb_eject(instance):
-    cfg = ctypes.WinDLL("cfgmgr32")
-    locate = cfg.CM_Locate_DevNodeW
-    locate.argtypes = (ctypes.POINTER(wintypes.DWORD), wintypes.LPCWSTR, wintypes.ULONG)
-    locate.restype = wintypes.ULONG
-    node = wintypes.DWORD()
-    if locate(ctypes.byref(node), instance, 0):
-        raise OSError("Windows 已找不到这台 iPod，请刷新设备。")
-    request = cfg.CM_Request_Device_EjectW
-    request.argtypes = (wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), wintypes.LPWSTR, wintypes.ULONG, wintypes.ULONG)
-    request.restype = wintypes.ULONG
-    veto = wintypes.DWORD()
-    name = ctypes.create_unicode_buffer(260)
-    status = request(node, ctypes.byref(veto), name, len(name), 0)
-    if status:
-        detail = f"（{name.value}）" if name.value else f"（Windows 代码 0x{status:02X}）"
-        raise OSError("Windows 未能安全弹出 iPod" + detail + "。请保持连接，关闭占用设备的窗口或程序后重试。")
 
 
 @dataclass
@@ -180,7 +127,7 @@ class Device:
         if original[:4] != b"mhbd" or int.from_bytes(original[8:12], "little") != len(original):
             raise ValueError("iTunesDB 文件头或长度不正确。")
         signed = int.from_bytes(original[48:50], "little") == 1
-        disk_ids = _windows_disk_ids(root.drive) if os.name == "nt" and root == Path(root.anchor) else ()
+        disk_ids = system.volume_ids(root)
         candidates = (_guid(manual_guid),) if manual_guid else _device_guids(root, disk_ids)
         guid = next((g for g in candidates if g and signed and verify_hash58(original, g)), None)
         if manual_guid and not guid:
@@ -190,12 +137,12 @@ class Device:
                    usb_instance, identify(root, usb_instance), disk_ids)
 
     def eject(self):
-        if not self.usb_instance or self.root != Path(self.root.anchor):
-            raise ValueError("弹出需要通过 USB 连接的 iPod 盘符。")
-        current = _ipod_usb_instance(_windows_disk_ids(self.root.drive))
+        if not self.usb_instance or not system.is_volume_root(self.root):
+            raise ValueError("弹出需要通过 USB 连接的 iPod 卷。")
+        current = _ipod_usb_instance(system.volume_ids(self.root))
         if not current or current.casefold() != self.usb_instance.casefold():
-            raise OSError("盘符对应的 iPod 已断开或改变，请刷新设备。")
-        _request_usb_eject(current)
+            raise OSError("设备对应的 iPod 已断开或改变，请刷新设备。")
+        system.eject_device(current, self.disk_ids)
 
 
 def listening(device):

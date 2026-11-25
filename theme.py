@@ -6,12 +6,13 @@ drawing, and avoid importing them by name, so that a theme change reaches every 
 
 import ctypes
 import re
+import sys
 import tkinter as tk
 from tkinter import ttk
 
 from PIL import Image, ImageColor, ImageDraw
 
-FONT = "Microsoft YaHei UI"
+FONT = "PingFang SC" if sys.platform == "darwin" else "Microsoft YaHei UI"
 THEMES = {"light": "浅色", "dark": "深色"}
 PALETTES = {
     "light": dict(
@@ -136,7 +137,8 @@ def wrap_lines(text, measure, width):
 
 
 def scaler(widget):
-    zoom = widget.winfo_fpixels("1i") / 96
+    # Tk on macOS reports 72 points per inch; Windows is designed at 96 dpi.
+    zoom = widget.winfo_fpixels("1i") / (72 if sys.platform == "darwin" else 96)
     def px(*units):
         scaled = tuple(round(u * zoom) for u in units)
         return scaled[0] if len(scaled) == 1 else scaled
@@ -145,6 +147,8 @@ def scaler(widget):
 
 def title_bar(window):
     """Give a window sharp icons and a title bar that matches the theme. Older systems ignore the colour request."""
+    if sys.platform != "win32":
+        return
     try:
         handle = int(window.wm_frame(), 16)
         user = ctypes.windll.user32

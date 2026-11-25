@@ -12,9 +12,10 @@ import re
 import time
 import traceback
 
+import system
 from version import __version__
 
-LOGS = Path(os.environ["LOCALAPPDATA"]) / "ClassicDrop" / "Logs"
+LOGS = system.LOGS
 LOG_FILE = "classicdrop.log"
 LOG_TAIL = 60
 

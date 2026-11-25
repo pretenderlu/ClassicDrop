@@ -1,6 +1,5 @@
 """Publish an already-verified Classic database after its audio files are durable."""
 
-import ctypes
 import hashlib
 import json
 import os
@@ -9,13 +8,13 @@ import shutil
 import stat
 import tempfile
 from contextlib import ExitStack, contextmanager
-from ctypes import wintypes
 from dataclasses import replace
 from pathlib import Path
 
 from audio_convert import prepared_files
-import winarch
-winarch.import_wasmtime()
+import cpuarch
+import system
+cpuarch.import_wasmtime()
 from iPodDB.library import WriteResources
 from library import (DB, MUSIC, STAGE, delete_playlist, fingerprint, inside, is_music, playlist_edit, prepared_database,
                      select_additions, validate_playlist_name, without_music, write_file)
@@ -31,32 +30,11 @@ NEW_FILE = re.compile(r"iPod_Control/Music/F\d{2}/CD[0-9A-F]{12}\.(?:mp3|m4a|wav
 def device_lock(device):
     if not device.guid:
         raise ValueError("需要与现有曲库匹配的 FireWire GUID 才能传歌。")
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel.CreateFileW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
-                                   wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
-    kernel.CreateFileW.restype = wintypes.HANDLE
-    kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
     path = inside(device.root, "iPod_Control/iTunes/iTunesLock")
-    handle = kernel.CreateFileW(str(path), 0xC0000000, 0, None, 4, 0x80, None)
-    if handle == wintypes.HANDLE(-1).value:
-        detail = ctypes.WinError(ctypes.get_last_error())
-        raise OSError(f"无法锁定 iPod。请关闭其他传歌软件，并检查磁盘写入权限。\n{detail}")
-    db_handle = kernel.CreateFileW(str(inside(device.root, DB)), 0x80000000, 5, None, 3, 0x80, None)
-    invalid = wintypes.HANDLE(-1).value
-    def release_database():
-        nonlocal db_handle
-        if db_handle != invalid:
-            kernel.CloseHandle(db_handle)
-            db_handle = invalid
-    try:
-        if db_handle == invalid:
-            raise OSError("曲库正在被其他软件写入，或设备已断开。")
+    with system.lock_file(path, inside(device.root, DB)) as release_database:
         if fingerprint(inside(device.root, DB)) != device.version:
             raise ValueError("读取后曲库已改变。请刷新设备，再传入歌曲。")
         yield release_database
-    finally:
-        release_database()
-        kernel.CloseHandle(handle)
 
 
 def backup_bytes(destination, data, digest):
@@ -111,7 +89,7 @@ def recover(device, backups=None):
     allowed.update(("sidecar.part", "removed") if deletion else ("media.part",))
     if covers:
         allowed.add("cover.part")
-    if {p.name for p in folder.iterdir()} - allowed:
+    if {p.name for p in folder.iterdir() if not system.junk_file(p.name)} - allowed:
         raise ValueError(f"暂存目录内含有无法识别的文件，请检查：{folder}")
     if plan is not None:
         current = fingerprint(inside(device.root, DB))

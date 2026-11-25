@@ -1,12 +1,11 @@
 """Work out which iPod model and finish is connected. Read-only, and never required for opening a library."""
 
-import ctypes
-from ctypes import wintypes
 from dataclasses import dataclass
 import os
 from pathlib import Path
 import re
 
+import system
 from device_registry import (DEFAULT_DEVICE_REGISTRY, DatabaseChecksum, DeviceEvidence, DeviceIdentifier, EvidenceAuthority,
                              UsbIdentifier, parse_sysinfo, parse_sysinfo_extended)
 
@@ -42,54 +41,6 @@ class Player:
     def name(self):
         """What to call it when its library carries no name."""
         return FAMILIES.get(self.family, self.family)
-
-
-class _PassThrough(ctypes.Structure):
-    _fields_ = [("Length", ctypes.c_ushort), ("ScsiStatus", ctypes.c_ubyte), ("PathId", ctypes.c_ubyte),
-                ("TargetId", ctypes.c_ubyte), ("Lun", ctypes.c_ubyte), ("CdbLength", ctypes.c_ubyte),
-                ("SenseInfoLength", ctypes.c_ubyte), ("DataIn", ctypes.c_ubyte), ("DataTransferLength", ctypes.c_ulong),
-                ("TimeOutValue", ctypes.c_ulong), ("DataBufferOffset", ctypes.c_size_t), ("SenseInfoOffset", ctypes.c_ulong),
-                ("Cdb", ctypes.c_ubyte * 16)]
-
-
-class _Inquiry(ctypes.Structure):
-    _fields_ = [("header", _PassThrough), ("sense", ctypes.c_ubyte * 32), ("data", ctypes.c_ubyte * 255)]
-
-
-def scsi_sysinfo(drive):
-    """The device description an iPod returns over SCSI INQUIRY, as iTunes reads it. No data is written."""
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel.CreateFileW.restype = wintypes.HANDLE
-    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
-                                   wintypes.DWORD, wintypes.HANDLE]
-    kernel.DeviceIoControl.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p,
-                                       wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p]
-    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-    # Pass-through needs a handle opened for reading and writing, even for a command that only reads.
-    handle = kernel.CreateFileW("//./" + drive, 0xC0000000, 3, None, 3, 0, None)
-    if handle == wintypes.HANDLE(-1).value:
-        raise ctypes.WinError(ctypes.get_last_error())
-
-    def page(number):
-        packet = _Inquiry()
-        head = packet.header
-        head.Length, head.CdbLength, head.SenseInfoLength, head.DataIn = ctypes.sizeof(_PassThrough), 6, 32, 1
-        head.DataTransferLength, head.TimeOutValue = 255, 5
-        head.DataBufferOffset, head.SenseInfoOffset = _Inquiry.data.offset, _Inquiry.sense.offset
-        head.Cdb[:6] = (0x12, 1, number, 0, 255, 0)
-        returned = wintypes.DWORD()
-        if not kernel.DeviceIoControl(handle, 0x4D004, ctypes.byref(packet), ctypes.sizeof(packet), ctypes.byref(packet),
-                                      ctypes.sizeof(packet), ctypes.byref(returned), None):
-            raise ctypes.WinError(ctypes.get_last_error())
-        if head.ScsiStatus:
-            raise OSError(f"SCSI status {head.ScsiStatus}")
-        raw = bytes(packet.data)
-        return raw[4:4 + raw[3]]
-
-    try:
-        return b"".join(page(number) for number in page(0xC0) if number >= 0xC2)
-    finally:
-        kernel.CloseHandle(handle)
 
 
 def _device_files(root):
@@ -136,9 +87,9 @@ def identify(root, usb=None):
     """
     try:
         hardware = DeviceEvidence()
-        if usb and os.name == "nt" and root == Path(root.anchor):
+        if usb and system.WINDOWS and system.is_volume_root(root):
             try:
-                hardware = parse_sysinfo_extended(scsi_sysinfo(root.drive), source="SCSI",
+                hardware = parse_sysinfo_extended(system.scsi_sysinfo(root.drive), source="SCSI",
                                                   authority=EvidenceAuthority.CURRENT_HARDWARE)
             except OSError:
                 pass

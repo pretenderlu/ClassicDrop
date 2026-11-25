@@ -7,10 +7,11 @@ import os
 import plistlib
 import re
 import stat
+import system
 from pathlib import Path
 
-import winarch
-winarch.import_wasmtime()
+import cpuarch
+cpuarch.import_wasmtime()
 from iPodDB.sidecars import (MAX_SIDECAR_BYTES, genius_playlist_number, is_playback_sidecar,
                              parse_itunes_stats, parse_play_counts_plist, remap_genius_playlist,
                              remap_playback_sidecar)
@@ -134,12 +135,12 @@ def removal_receipt(device, desired, after_hash, report, genius=None):
             new = None
         else:
             new = base64.b64encode(result).decode("ascii")
-        readonly = bool(path.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY)
+        readonly = system.is_readonly(path.stat())
         updates[name] = [_digest(data), new, readonly]
     if genius is not None:
         old, new = genius
         path = inside(device.root, "iPod_Control/iTunes/" + GENIUS)
-        readonly = bool(path.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY)
+        readonly = system.is_readonly(path.stat())
         updates[GENIUS] = [_digest(old), "same" if new == old else base64.b64encode(new).decode("ascii"), readonly]
     report(f"已核对 {len(media)} 个独立音频文件。")
     return dict(before=device.version, after=after_hash, guid=device.guid.hex(),
@@ -151,7 +152,7 @@ def merge_receipt(device, after_hash, counts):
     updates = {}
     for name, path in _sidecars(device).items():
         data = path.read_bytes()
-        readonly = bool(path.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY)
+        readonly = system.is_readonly(path.stat())
         retire = name.casefold() == "play counts"
         if retire and data != counts:
             raise ValueError("设备上的播放记录已变化，请刷新后重试。")
@@ -201,7 +202,7 @@ def settle_removal(device, plan, backups, committed):
     slots = inside(device.root, STAGE + "/removed")
     if slots.exists():
         expected = {str(i) for i in range(len(receipt["media"]))}
-        if any(p.name not in expected for p in slots.iterdir()):
+        if any(p.name not in expected and not system.junk_file(p.name) for p in slots.iterdir()):
             raise ValueError("暂存目录中出现其他文件，请检查后再恢复。")
     for i, (relative, stamp) in enumerate(receipt["media"]):
         slot = inside(device.root, STAGE + "/removed/" + str(i))
@@ -212,9 +213,9 @@ def settle_removal(device, plan, backups, committed):
                 try:
                     slot.unlink()
                 except PermissionError:
-                    if not slot.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY:
+                    if not system.is_readonly(slot.stat()):
                         raise
-                    slot.chmod(stat.S_IWRITE)
+                    slot.chmod(slot.stat().st_mode | stat.S_IWUSR)
                     slot.unlink()
             else:
                 # Windows rename never overwrites a file recreated at the original path.
