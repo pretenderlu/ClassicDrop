@@ -179,7 +179,7 @@ class FormatsAndPlaylists(unittest.TestCase):
         self.assertEqual(direct.suffix, ".wav")
         self.assertEqual(fingerprint(direct), fingerprint(mono))
         self.send([mono], formats={mono: "aac"})
-        aac = EasyMP4(self.root / self.device.library.snapshot.tracks[-1].metadata.location)
+        aac = source_audio(self.root / self.device.library.snapshot.tracks[-1].metadata.location)
         self.assertEqual((aac.info.codec, aac.info.channels, aac.info.sample_rate), ("mp4a.40.2", 1, 44100))
         self.assertEqual(self.send([mono], formats={mono: "aac"}), (0, 1, None))
         hires = self.site / "高解析.wav"
@@ -189,6 +189,16 @@ class FormatsAndPlaylists(unittest.TestCase):
         self.assertEqual((alac.info.codec, alac.info.channels, alac.info.sample_rate, alac.info.bits_per_sample),
                          ("alac", 2, 48000, 24))
         self.assertEqual(self.send([hires], formats={hires: "aac"}), (0, 1, None))
+
+    def test_aac_channels_come_from_the_stream_config_not_the_stsd_entry(self):
+        # Apple's encoders can leave the stsd channel count at 2 on a mono file.
+        data = bytearray((FIXTURES / "aac.m4a").read_bytes())
+        entry = data.find(b"mp4a", data.find(b"stsd")) - 4
+        data[entry + 24:entry + 26] = bytes([0, 2])
+        patched = self.site / "patched.m4a"
+        patched.write_bytes(data)
+        self.assertEqual(EasyMP4(patched).info.channels, 2)   # stsd says stereo
+        self.assertEqual(source_audio(patched).info.channels, 1)  # the AAC stream says mono
 
     def test_high_depth_or_rate_unifies_wav_flac_alac_and_aac(self):
         for rate, width, codec in ((44100, 4, "wav"), (48000, 4, "wav"), (44100, 4, "pcm_f32le"),

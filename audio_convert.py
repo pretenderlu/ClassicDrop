@@ -20,7 +20,7 @@ from mutagen._riff import RiffFile
 from mutagen.flac import FLAC, VCFLACDict
 from mutagen._vorbis import VorbisEncodingError
 from mutagen.mp3 import EasyMP3, MP3
-from mutagen.mp4 import MP4, MP4Cover
+from mutagen.mp4 import Atoms, MP4, MP4Cover
 from mutagen.wave import WAVE
 
 ASK_FORMAT = {".flac", ".wav", ".dsf", ".dff"}
@@ -139,7 +139,81 @@ def _read_wave(path):
     return audio
 
 
-READERS = {".mp3": EasyMP3, ".m4a": EasyMP4, ".flac": _SourceFLAC, ".wav": _read_wave, ".dsf": _read_dsf, ".dff": _read_dff}
+def _descriptor_chain(data):
+    i = 0
+    while i < len(data):
+        tag = data[i]
+        i += 1
+        length = 0
+        while i < len(data):
+            byte = data[i]
+            i += 1
+            length = (length << 7) | byte & 0x7F
+            if not byte & 0x80:
+                break
+        yield tag, data[i:i + length]
+        i += length
+
+
+def _asc(esds):
+    """AudioSpecificConfig bytes inside an esds element's descriptor chain, or None."""
+    for tag, es in _descriptor_chain(esds):
+        if tag != 0x03 or len(es) < 3:
+            continue
+        i = 3  # ES_ID (2 bytes) + flags
+        if es[2] & 0x80:
+            i += 2
+        if es[2] & 0x40:
+            i += 1 + es[i]
+        if es[2] & 0x20:
+            i += 2
+        for tag, decoder in _descriptor_chain(es[i:]):
+            if tag != 0x04 or len(decoder) < 13:
+                continue
+            for tag, info in _descriptor_chain(decoder[13:]):
+                if tag == 0x05:
+                    return info
+    return None
+
+
+def mp4_channels(path):
+    """AAC channelConfiguration from the AudioSpecificConfig, or None when unreadable.
+
+    Apple's encoders can leave the stsd channel count at 2 on a mono file, so the esds
+    stream config is the only reliable channel count for AAC.
+    """
+    try:
+        with open(path, "rb") as stream:
+            for moov in Atoms(stream).atoms:
+                if moov.name != b"moov":
+                    continue
+                todo = list(moov.children or ())
+                while todo:
+                    atom = todo.pop()
+                    todo += atom.children or ()
+                    if atom.name != b"stsd":
+                        continue
+                    data = atom.read(stream)[1]
+                    i = data.find(b"esds")
+                    if i >= 0:
+                        info = _asc(data[i + 8:])  # box name + FullAtom version/flags
+                        if info and len(info) >= 2:
+                            count = info[1] >> 3 & 0x0F
+                            return {7: 8}.get(count, count) or None
+    except Exception:
+        pass
+    return None
+
+
+def mp4_audio(path):
+    """EasyMP4 whose .info.channels follows the AAC stream rather than the stsd entry."""
+    audio = EasyMP4(path)
+    if (audio.info.codec or "").startswith("mp4a"):
+        audio.info.channels = mp4_channels(path) or audio.info.channels
+    return audio
+
+
+READERS = {".mp3": EasyMP3, ".m4a": mp4_audio, ".flac": _SourceFLAC, ".wav": _read_wave, ".dsf": _read_dsf, ".dff": _read_dff}
 
 
 def source_audio(path):
@@ -423,7 +497,7 @@ def _convert(source, mode, destination):
                  *downmix, *codec, "-ar", str(rate), "-ac", str(channels), "-threads:a", "1", "-fflags", "+bitexact",
                  "-flags:a", "+bitexact", "-f", "ipod", str(destination)])
     _metadata(source, audio, destination)
-    encoded = EasyMP4(destination).info
+    encoded = mp4_audio(destination).info
     want = "mp4a.40.2" if mode == "aac" else "alac"
     if (encoded.codec != want or encoded.sample_rate != rate or encoded.channels != channels or encoded.length <= 0
             or (mode != "aac" and encoded.bits_per_sample != bits)):
