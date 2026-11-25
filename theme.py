@@ -218,14 +218,14 @@ def apply(root, px):
               bordercolor=[("focus", FIELD_LINE)])
     # Tk fills an image element by tiling it, so a tiny image makes every repaint slow. Keep it large.
     if not hasattr(root, "heading_underline"):
-        root.heading_underline = tk.PhotoImage(master=root, width=512, height=64)
+        root.heading_underline = tk.PhotoImage(master=root, width=512, height=4)
         style.element_create("Underline.heading", "image", root.heading_underline, border=(0, 0, 0, 1), sticky="nsew")
         def point(event):
             if isinstance(event.widget, ttk.Button):
                 event.widget.configure(cursor="" if event.widget.instate(["disabled"]) else "hand2")
         root.bind_class("TButton", "<Enter>", point, add="+")
-    root.heading_underline.put(SURFACE, to=(0, 0, 512, 63))
-    root.heading_underline.put(LINE, to=(0, 63, 512, 64))
+    root.heading_underline.put(SURFACE, to=(0, 0, 512, 3))
+    root.heading_underline.put(LINE, to=(0, 3, 512, 4))
     style.layout("Treeview.Heading", [("Underline.heading", {"sticky": "nswe"}), ("Treeheading.padding", {
         "sticky": "nswe", "children": [("Treeheading.text", {"sticky": "we"})]})])
     style.configure("Treeview.Heading", foreground=MUTED, font=(FONT, 9, "bold"), padding=px(7, 6))
