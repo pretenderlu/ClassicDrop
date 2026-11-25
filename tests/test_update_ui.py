@@ -1,5 +1,6 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from urllib.parse import parse_qs, urlsplit
 import time
 import tkinter as tk
 import unittest
@@ -104,6 +105,40 @@ class UpdateInterfaceTests(unittest.TestCase):
             self.window.update()
         opened.assert_called_once_with(PROJECT_URL, new=2)
         self.assertEqual(PROJECT_URL, "https://github.com/pretenderlu/ClassicDrop")
+        self.assertEqual(ui.feedback_link["text"], "反馈")
+        with patch.object(app.webbrowser, "open") as opened:
+            ui.feedback_link.event_generate("<Button-1>")
+            self.window.update()
+            dialog, = self.dialogs()
+            self.assertEqual(dialog.title(), "反馈问题")
+            self.assertIn("ClassicDrop：v" + __version__, ui.feedback_text.get("1.0", "end"))
+            opened.assert_not_called()
+            copy = next(b for b in ui.feedback_buttons.winfo_children() if b["text"] == "复制并打开 GitHub")
+            copy.invoke()
+            self.window.update()
+        url = opened.call_args.args[0]
+        self.assertTrue(url.startswith(PROJECT_URL + "/issues/new?body="))
+        body = parse_qs(urlsplit(url).query)["body"][0]
+        self.assertIn("ClassicDrop：v" + __version__, body)
+        self.assertIn("Windows", body)
+        copied = self.window.clipboard_get()
+        self.assertIn("ClassicDrop：v" + __version__, copied)
+        self.assertIn("最近的日志", copied)
+        self.assertEqual(self.dialogs(), [])
+
+    def test_a_failed_operation_is_remembered_and_points_at_feedback(self):
+        import diagnostics
+        diagnostics.reset()
+        self.addCleanup(diagnostics.reset)
+        with patch.object(app.messagebox, "showerror") as shown:
+            self.ui._work("测试操作", lambda report: 1 / 0, lambda result: None)
+            self.settle(lambda: shown.called)
+        text = shown.call_args.args[1]
+        self.assertIn("division by zero", text)
+        self.assertIn("「反馈」", text)
+        report = diagnostics.report()
+        self.assertIn("division by zero", report)
+        self.assertIn("ZeroDivisionError", report)
 
     def test_quiet_check_shows_a_red_dot_and_a_manual_check_reports(self):
         ui = self.ui

@@ -1,7 +1,8 @@
 import ctypes
 import json
-import logging
 import os
+import platform
+import plistlib
 from dataclasses import replace
 from pathlib import Path
 from queue import Empty, Queue
@@ -24,13 +25,14 @@ from tkinterdnd2 import DND_FILES, TkinterDnD
 from audio_convert import LABELS
 from coverflow import CoverFlow
 from device_identity import describe
+import diagnostics
 from import_dialog import AUDIO_TYPES, ImportDialog, NewPlaylist, playlist_targets
 import theme
 from library import (DB, Device, editable_playlist, is_music, listening, move_playlist_entries, playlist_edit, rename_device,
                      rename_playlist)
 from native_covers import device_covers, load_cover
 from transfer import STAGE, export_tracks, recover_interrupted, transfer
-from updates import PROJECT_URL, Release, check_for_updates, download_update, plain_notes, release_history, version_key
+from updates import PROJECT_URL, Release, check_for_updates, download_update, issue_url, plain_notes, release_history, version_key
 from version import __version__
 
 BACKUPS = Path(os.environ["LOCALAPPDATA"]) / "ClassicDrop" / "Backups"
@@ -49,7 +51,7 @@ class App:
         check_updates asks GitHub for a newer release shortly after start.
         """
         self.window = window
-        self.latest_update = self.update_dialog = None
+        self.latest_update = self.update_dialog = self.feedback_dialog = None
         self.history_stamp = 0
         self.settings = settings
         saved = {}
@@ -105,6 +107,10 @@ class App:
         if check_updates:
             window.after(1500, self.check_updates)
         window.protocol("WM_DELETE_WINDOW", self.close)
+        window.report_callback_exception = self._callback_error
+
+    def _callback_error(self, kind, exc, tb):
+        diagnostics.remember(str(exc) or kind.__name__, exc)
 
     def _layout(self):
         w = self.window
@@ -272,6 +278,8 @@ class App:
             return label
         self.github_link = link("GitHub", lambda: webbrowser.open(PROJECT_URL, new=2))
         self.github_link.pack(side="left", padx=px(0, 14))
+        self.feedback_link = link("反馈", self.open_feedback)
+        self.feedback_link.pack(side="left", padx=px(0, 14))
         self.version_link = link("v" + __version__, self.open_versions)
         self.version_link.pack(side="left")
         # Shown beside the version number while a newer release is waiting.
@@ -294,15 +302,29 @@ class App:
         self.status.set(status)
         self._buttons()
         self.progress_after = self.window.after(300, self._show_progress)
+        diagnostics.log.info("%s", status)
+        def report(text):
+            diagnostics.log.info("%s", text)
+            self.events.put(("status", text))
         def worker():
             with self.cover_lock:
                 pass  # let a cover that is being read finish before the device is used
             try:
-                result = function(lambda text: self.events.put(("status", text)))
+                result = function(report)
                 self.events.put(("done", (done, result)))
             except Exception as exc:
-                self.events.put(("error", str(exc) or type(exc).__name__))
+                message = str(exc) or type(exc).__name__
+                diagnostics.remember(message, exc)
+                self.events.put(("error", message))
         Thread(target=worker, daemon=True).start()
+
+    def _show_error(self, title, message):
+        messagebox.showerror(title, f"{message}\n\n如需反馈，点窗口右下角的「反馈」，报错信息会自动附上。",
+                             parent=self.window)
+
+    def _fail(self, title, message, exc=None):
+        diagnostics.remember(message, exc)
+        self._show_error(title, message)
 
     def _show_progress(self):
         self.progress_after = None
@@ -354,11 +376,12 @@ class App:
                     self._end_progress()
                     self._buttons()
                     if kind == "done":
+                        diagnostics.log.info("操作完成")
                         callback, result = data
                         callback(result)
                     else:
                         self.status.set("操作未完成，请查看提示。")
-                        messagebox.showerror("ClassicDrop", data, parent=self.window)
+                        self._show_error("ClassicDrop", data)
         except Empty:
             pass
         self.window.after(65, self._poll)
@@ -460,6 +483,7 @@ class App:
             covers.append(listening(device))
             return device
         def loaded(device):
+            self._hide_device(device)
             self.device = device
             self.usage, self.covers, self.cover_reads, self.cover_thumbs, self.listening = covers
             self.sharp_covers, self.cover_images, self.group_shown = {}, {}, None
@@ -480,6 +504,29 @@ class App:
                 after_load()
         self.render(keep_view=True)
         self._work("正在读取 iPod 曲库…", read, loaded)
+
+    def _hide_device(self, dev):
+        """The serial, FireWire GUID and device name must never reach the log or the feedback report."""
+        name = dev.library.snapshot.device_name or ""
+        generic = {"ipod", "ipod classic", (dev.profile.name if dev.profile else "").lower()}
+        values = [name if name.strip().lower() not in generic else "", dev.usb_instance or "", *dev.disk_ids]
+        if dev.guid:
+            values.append(dev.guid.hex())
+        info = dev.root / "iPod_Control/Device"
+        try:
+            data = plistlib.loads((info / "SysInfoExtended").read_bytes())
+            values += [str(v) for k, v in data.items() if "serial" in str(k).lower()]
+        except Exception:
+            pass
+        try:
+            for line in (info / "SysInfo").read_text(encoding="utf-8", errors="replace").splitlines():
+                key, _, value = line.partition(":")
+                if "serial" in key.strip().lower():
+                    values.append(value.strip())
+        except OSError:
+            pass
+        diagnostics.hide(*values)
+        diagnostics.log.info("已识别设备：%s", describe(dev.profile) or "未知机型")
 
     def navigate(self, _):
         chosen = self.nav.selection()
@@ -935,8 +982,10 @@ class App:
             return
         try:
             desired = rename_device(snap, name)
+            if desired.device_name.strip().lower() not in {"ipod", "ipod classic"}:
+                diagnostics.hide(desired.device_name)
         except ValueError as exc:
-            messagebox.showerror("修改设备名称", str(exc), parent=self.window)
+            self._fail("修改设备名称", str(exc), exc)
             return
         self._save(desired, f"设备已改名为「{desired.device_name}」。")
 
@@ -994,7 +1043,7 @@ class App:
             desired = playlist_edit(self.device.library.snapshot, tracks, playlist_id=playlist_id, name=name,
                                     remove=remove, entry_ids=entries)
         except ValueError as exc:
-            messagebox.showerror("歌单", str(exc), parent=self.window)
+            self._fail("歌单", str(exc), exc)
             return
         def show_new():
             created = next(p for p in self.device.library.snapshot.playlists if p.name == name.strip())
@@ -1056,7 +1105,7 @@ class App:
                     self.tree.selection_set([i for i, (_, e) in self.rows.items() if e in entries and self.tree.exists(i)])
                 self._save(desired, "播放顺序已保存。", reselect)
         except ValueError as exc:
-            messagebox.showerror("播放列表", str(exc), parent=self.window)
+            self._fail("播放列表", str(exc), exc)
 
     def edit_tags(self):
         tracks = self.selected()
@@ -1253,6 +1302,66 @@ class App:
             return False
         return True
 
+    def open_feedback(self):
+        """Prepare the diagnostics for an Issue: environment, the last error and the recent log."""
+        if self.feedback_dialog and self.feedback_dialog.winfo_exists():
+            return
+        player = self.device.profile if self.device else None
+        model = f"{player.name}（{describe(player)}）" if player else ""
+        text = diagnostics.report(model)
+        px = self.px
+        dialog = self.feedback_dialog = tk.Toplevel(self.window)
+        dialog.title("反馈问题")
+        dialog.configure(bg=theme.SURFACE)
+        dialog.resizable(False, False)
+        dialog.transient(self.window)
+        dialog.grab_set()
+        self.window.after(60, theme.title_bar, dialog)
+        frame = tk.Frame(dialog, bg=theme.SURFACE, padx=px(22), pady=px(20))
+        frame.pack(fill="both", expand=True)
+        tk.Label(frame, text="下面的内容会复制到剪贴板。Issue 是公开的，提交前可以在 GitHub 上删改。",
+                 bg=theme.SURFACE, fg=theme.NAVY, font=(theme.FONT, 10)).pack(anchor="w")
+        box = tk.Frame(frame, bg=theme.LINE, padx=1, pady=1)
+        box.pack(fill="both", expand=True, pady=px(12, 0))
+        notes = self.feedback_text = tk.Text(box, wrap="char", height=20, width=58, font=(theme.FONT, 10), bg=theme.BAR,
+                                             fg=theme.NAVY, relief="flat", highlightthickness=0, padx=px(12), pady=px(6),
+                                             cursor="arrow", spacing1=px(1), spacing3=px(1))
+        scroll = ttk.Scrollbar(box, orient="vertical", command=notes.yview)
+        notes.configure(yscrollcommand=scroll.set)
+        notes.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        notes.insert("end", text)
+        notes.configure(state="disabled")
+        foot = tk.Frame(frame, bg=theme.SURFACE)
+        foot.pack(fill="x", pady=px(14, 0))
+        def show_logs(_):
+            diagnostics.LOGS.mkdir(parents=True, exist_ok=True)
+            os.startfile(diagnostics.LOGS)
+        logs = tk.Label(foot, text="打开日志文件夹", bg=theme.SURFACE, fg=theme.BLUE, cursor="hand2",
+                        font=(theme.FONT, 10, "underline"))
+        logs.pack(side="left")
+        logs.bind("<Button-1>", show_logs)
+        self.feedback_buttons = tk.Frame(foot, bg=theme.SURFACE)
+        self.feedback_buttons.pack(side="right")
+        def copy_and_open():
+            self.window.clipboard_clear()
+            self.window.clipboard_append(text)
+            webbrowser.open(issue_url(model), new=2)
+            self.close_feedback()
+        ttk.Button(self.feedback_buttons, text="关闭", command=self.close_feedback).pack(side="left")
+        ttk.Button(self.feedback_buttons, text="复制并打开 GitHub", style="Accent.TButton",
+                   command=copy_and_open).pack(side="left", padx=px(8, 0))
+        dialog.protocol("WM_DELETE_WINDOW", self.close_feedback)
+        dialog.bind("<Escape>", lambda _: self.close_feedback())
+        dialog.update_idletasks()
+        dialog.geometry(f"+{self.window.winfo_rootx() + (self.window.winfo_width() - dialog.winfo_width()) // 2}"
+                        f"+{self.window.winfo_rooty() + (self.window.winfo_height() - dialog.winfo_height()) // 2}")
+
+    def close_feedback(self):
+        if self.feedback_dialog and self.feedback_dialog.winfo_exists():
+            self.feedback_dialog.destroy()
+        self.feedback_dialog = None
+
     def open_versions(self):
         """Show what each release changed, and offer the newer one when there is one."""
         if self.update_dialog and self.update_dialog.winfo_exists():
@@ -1412,7 +1521,8 @@ class App:
 
 def main():
     ctypes.windll.user32.SetProcessDPIAware()
-    logging.getLogger("iPodDB").addHandler(logging.NullHandler())
+    diagnostics.setup()
+    diagnostics.log.info("ClassicDrop %s 启动 · Windows %s（%s）", __version__, platform.release(), platform.version())
     window = TkinterDnD.Tk()
     app = App(window, browse="album", settings=SETTINGS, check_updates=True)
     paths = [Path(value) for value in sys.argv[1:]]

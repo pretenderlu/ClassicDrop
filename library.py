@@ -160,6 +160,7 @@ class Device:
     guid: bytes | None
     usb_instance: str | None = None
     profile: object = None
+    disk_ids: tuple = ()
 
     @classmethod
     def open(cls, directory, manual_guid=None):
@@ -183,7 +184,7 @@ class Device:
             raise ValueError("这个 GUID 与当前曲库校验不匹配。")
         usb_instance = _ipod_usb_instance(disk_ids)
         return cls(root, original, hashlib.sha256(original).hexdigest(), IPodLibrary(original), guid,
-                   usb_instance, identify(root, usb_instance))
+                   usb_instance, identify(root, usb_instance), disk_ids)
 
     def eject(self):
         if not self.usb_instance or self.root != Path(self.root.anchor):

@@ -117,7 +117,7 @@ class WindowsUITests(unittest.TestCase):
                 ui.eject_button.invoke()
                 settle()
                 self.assertIs(ui.device, dev)
-                self.assertIn("设备被占用", error.call_args.args)
+                self.assertIn("设备被占用", error.call_args.args[1])
                 ui.eject_button.invoke()
                 settle()
             self.assertIsNone(ui.device)

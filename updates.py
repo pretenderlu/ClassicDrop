@@ -3,17 +3,34 @@
 import hashlib
 import json
 import os
+import platform
 import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from version import __version__
 
 REPOSITORY = "pretenderlu/ClassicDrop"
 PROJECT_URL = "https://github.com/" + REPOSITORY
+
+
+def environment_lines(device=""):
+    """Version, Windows build and iPod model; nothing that identifies the user. Shared with the feedback report."""
+    return [f"- ClassicDrop：v{__version__}", f"- 系统：Windows {platform.release()}（{platform.version()}）",
+            f"- iPod：{device or '未连接'}"]
+
+
+def issue_url(device=""):
+    """New-issue page with the environment filled in and a placeholder for the copied diagnostics."""
+    body = "\n".join(["## 问题描述", "", "", "## 复现步骤", "", "", "## 环境", *environment_lines(device), "",
+                      "## 诊断信息", "", "（已复制到剪贴板，请粘贴到这里）", ""])
+    return PROJECT_URL + "/issues/new?" + urlencode({"body": body})
+
+
 INSTALLER = re.compile(r"ClassicDropSetup-[\w.\-]+\.exe")
 
 
