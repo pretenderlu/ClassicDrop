@@ -198,6 +198,8 @@ jobs:
       - name: Download packages
         uses: actions/download-artifact@v8
         with:
+          # 只上传安装包，截图等诊断构件不进 Release。
+          pattern: ClassicDrop-*
           path: packages
           merge-multiple: true
 
