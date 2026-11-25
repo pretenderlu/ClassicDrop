@@ -41,7 +41,7 @@ nano 第 3、4 代的曲库格式和校验方式与 classic 相同。程序按�
 - **AAC-LC** 适合节省机内空间，输出 M4A。目标码率为立体声 256 kbps、单声道 128 kbps，实际码率随音源而变化。
 - **保留原文件格式** 默认用于 MP3 和 M4A（AAC-LC 或 ALAC），符合无损预设的 PCM WAV 也可以原样传入。原样传输支持单声道或双声道、最高 48 kHz。
 
-转码器随软件提供。FFmpeg 负责全部解码（FLAC、WAV、DSD、重采样和混音）。编码时优先使用 Apple 品质的编码器：ALAC 使用随软件提供的 refalac（启用 Apple 组件时为 qaac），AAC 在启用 Apple 组件时使用 qaac，其余情况用 FFmpeg 编码。启用方法是「工具与备份 → Apple 编码器」：程序会从 Apple 官网下载 iTunes 安装包（约 200 MB），校验 Apple 签名后只提取编码器需要的组件（约 43 MB）到 `%LOCALAPPDATA%\ClassicDrop\QTfiles64`，不安装 iTunes；已安装 iTunes 时会直接使用其中的组件。同一菜单可以移除提取的组件。编码器失败会自动回退到 FFmpeg 并记入运行日志。确认传输后才开始准备音频，支持无 DRM 的本地文件。「保留原格式」保留音频编码。有标签或封面需要补全、修改时，程序在电脑上的临时副本写入这些信息，再将副本传入 iPod。源文件保留原样。
+转码器随软件提供。FFmpeg 负责全部解码（FLAC、WAV、DSD、重采样和混音）。编码时优先使用 Apple 品质的编码器：ALAC 使用随软件提供的 refalac（启用 Apple 组件时为 qaac），AAC 在启用 Apple 组件时使用 qaac，其余情况用 FFmpeg 编码。启用方法是「工具与备份 → Apple 编码器」：程序会从 Apple 官网下载 iTunes 安装包（约 200 MB），校验 Apple 签名后只提取编码器需要的组件（约 43 MB）到 `%LOCALAPPDATA%\ClassicDrop\QTfiles64`，不安装 iTunes。电脑上装有从 Apple 官网下载的 iTunes 时，程序会自动使用其中的组件，不需要另外下载：第一次转码，或打开「Apple 编码器」菜单时检测（每次运行检测一次，软件运行期间新装的 iTunes 需要重启软件或打开该菜单后才会用上）。微软商店版 iTunes 的组件无法使用，需要通过菜单下载。如果菜单显示未启用，同样可以直接下载。同一菜单可以移除提取的组件。编码器失败会自动回退到 FFmpeg 并记入运行日志。确认传输后才开始准备音频，支持无 DRM 的本地文件。「保留原格式」保留音频编码。有标签或封面需要补全、修改时，程序在电脑上的临时副本写入这些信息，再将副本传入 iPod。源文件保留原样。
 
 带内嵌封面的歌曲传入时，ClassicDrop 会为 iPod 原厂播放界面生成缩略图，并把封面关联到对应的歌曲。FLAC、WAV、DSF 或 DFF 内嵌的 JPEG、PNG 封面也会随转码保存在 M4A 中，有多张时优先使用标记为正面的图片。
 
