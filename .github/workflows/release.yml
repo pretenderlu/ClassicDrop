@@ -153,7 +153,7 @@ jobs:
         # 打包好的程序先自检一遍：签名、FFmpeg、afconvert、tkdnd 全部通过才继续。
         run: |
           # 窗口程序无控制台输出，限时 120 秒，结果只写在 JSON 里。
-          python tools/selftest_check.py "$json" "${{ matrix.arch }}"
+          python tools/selftest_check.py "$RUNNER_TEMP/self-test.json" "${{ matrix.arch }}"
 
       - name: Upload macOS package
         uses: actions/upload-artifact@v7
