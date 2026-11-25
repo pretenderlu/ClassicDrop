@@ -388,11 +388,12 @@ def _convert(source, mode, destination):
             candidates.append(("refalac", exe, env, raw_args, raw_format))
     done = False
     if encoders.afconvert():
+        layout = "-l", "Stereo" if channels == 2 else "Mono"
         if mode == "aac":
             af_args, pcm = (["-f", "m4af", "-d", "aac", "-b", "256000" if channels == 2 else "128000",
-                             "-c", str(channels), "-s", "2", "-q", "127"], "pcm_f32le")
+                             "-c", str(channels), *layout, "-s", "2", "-q", "127"], "pcm_f32le")
         else:
-            af_args = ["-f", "m4af", "-d", "alac", "-c", str(channels)]
+            af_args = ["-f", "m4af", "-d", "alac", "-c", str(channels), *layout]
             pcm = "pcm_s24le" if bits == 24 else "pcm_s16le"
         try:
             encoders.afconvert_encode(af_args, decode, pcm, destination)
