@@ -14,7 +14,7 @@ ARCH="$(uname -m)"; if [ "$ARCH" = "x86_64" ]; then ARCH="x64"; fi   # DMG namin
 ENCODER="$("$PYTHON" - <<'PY'
 from pathlib import Path
 import imageio_ffmpeg, platform, sys
-arch = "arm64" if platform.machine() == "arm64" else "x86_64"
+arch = "aarch64" if platform.machine() == "arm64" else "x86_64"
 hits = list((Path(imageio_ffmpeg.__file__).parent / "binaries").glob(f"ffmpeg-macos-{arch}-*"))
 if not hits:
     sys.exit("Install the imageio-ffmpeg macOS wheel for this architecture.")
