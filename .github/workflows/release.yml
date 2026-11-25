@@ -109,8 +109,70 @@ jobs:
           if ($report.host_arch -ne "ARM64" -or $report.process_arch -ne "x64") { exit 1 }
           if ($report.wasmtime_dll -notmatch "win32-x86_64") { exit 1 }
 
+  macos:
+    # Apple Silicon 与 Intel 各打一个 DMG，只签名（ad-hoc），不做公证。
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Check tag matches __version__
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(python -c "import re; print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('version.py', encoding='utf-8').read()).group(1))")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match __version__ $version"
+            exit 1
+          fi
+
+      - name: Check Tk works
+        run: python -c "import tkinter; tkinter.Tk().destroy()"
+
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements-build.txt
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: Build ClassicDrop.app and DMG
+        run: bash build_mac.sh python
+
+      - name: Run bundled self-test
+        # 打包好的程序先自检一遍：签名、FFmpeg、afconvert、tkdnd 全部通过才继续。
+        run: |
+          json="$RUNNER_TEMP/self-test.json"
+          perl -e 'alarm 120; exec @ARGV' "dist/ClassicDrop.app/Contents/MacOS/ClassicDrop" --self-test "$json" || {
+            code=$?; cat "$json" 2>/dev/null; exit $code; }
+          cat "$json"
+          python - "$json" "${{ matrix.arch }}" <<'PY'
+          import json, sys
+          report = json.load(open(sys.argv[1], encoding="utf-8"))
+          assert report["ok"], report
+          assert report["process_arch"] == ("ARM64" if sys.argv[2] == "arm64" else "x64"), report
+          PY
+
+      - name: Upload macOS package
+        uses: actions/upload-artifact@v7
+        with:
+          name: ClassicDrop-macOS-${{ matrix.arch }}
+          path: dist/ClassicDrop-macOS-${{ matrix.arch }}-*.dmg
+          if-no-files-found: error
+          retention-days: 30
+
   draft-release:
-    needs: [windows, arm64-smoke]
+    needs: [windows, arm64-smoke, macos]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
