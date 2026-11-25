@@ -82,10 +82,11 @@ def stage_update(dmg, bundle, version, report=lambda _: None):
 
 
 SWAP_SCRIPT = """#!/bin/sh
-# Waits for the app to exit, then swaps in the staged update. Args: pid target staged log.
+# Waits for the app to exit, then swaps in the staged update. Args: pid target staged log [tries].
 exec >>"$4" 2>&1
 i=0
-while [ $i -lt 600 ] && kill -0 "$1" 2>/dev/null; do
+tries=${5:-600}
+while [ $i -lt "$tries" ] && kill -0 "$1" 2>/dev/null; do
     i=$((i + 1))
     sleep 0.1 2>/dev/null || sleep 1
 done

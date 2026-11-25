@@ -23,18 +23,20 @@ def fake_bundle(base, version="9.9.9", exe=b"#!/bin/sh\nexit 0\n"):
     binary.write_bytes(exe)
     binary.chmod(0o755)
     with open(app / "Contents" / "Info.plist", "wb") as stream:
-        plistlib.dump({"CFBundleShortVersionString": version, "CFBundleIdentifier": "test"}, stream)
+        plistlib.dump({"CFBundleShortVersionString": version, "CFBundleIdentifier": "test",
+                       "CFBundleExecutable": "ClassicDrop"}, stream)
     return app
 
 
 class BundleTests(unittest.TestCase):
     def test_running_bundle_finds_the_app_and_rejects_other_paths(self):
         with TemporaryDirectory() as tmp:
+            tmp = Path(tmp).resolve()
             bundle = fake_bundle(tmp)
             exe = bundle / "Contents" / "MacOS" / "ClassicDrop"
             with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", str(exe)):
                 self.assertEqual(mac_update.running_bundle(), bundle)
-            for exe in (bundle / "Contents" / "MacOS", Path(tmp) / "run", Path(tmp) / "x.app" / "ClassicDrop"):
+            for exe in (bundle / "Contents" / "MacOS", tmp / "run", tmp / "x.app" / "ClassicDrop"):
                 with patch.object(sys, "executable", str(exe)):
                     self.assertIsNone(mac_update.running_bundle())
             with patch.object(sys, "frozen", False, create=True):
@@ -99,12 +101,14 @@ class MacInstallTests(unittest.TestCase):
             mac_update.stage_update(dmg, target, "8.8.8")
         self.assertFalse((target.parent / ".ClassicDrop-update.app").exists())
 
-    def run_swap(self, target, staged, log):
+    def run_swap(self, target, staged, log, tries="600"):
         script = self.site / "swap.sh"
         script.write_text(mac_update.SWAP_SCRIPT, encoding="utf8")
+        # The pid must be reaped: a zombie child still answers kill -0.
         sleeper = subprocess.Popen(["sleep", "0.1"])
-        return subprocess.run(["/bin/sh", str(script), str(sleeper.pid), str(target), str(staged), str(log)],
-                              capture_output=True, timeout=60)
+        sleeper.wait()
+        return subprocess.run(["/bin/sh", str(script), str(sleeper.pid), str(target), str(staged), str(log),
+                               tries], capture_output=True, timeout=60)
 
     def test_swap_replaces_and_relaunches(self):
         target = fake_bundle(self.site / "installed", "1.0.0")
@@ -124,6 +128,20 @@ class MacInstallTests(unittest.TestCase):
         self.run_swap(target, ghost, self.site / "swap.log")
         self.assertEqual(mac_update.bundle_version(target), "1.0.0")
         self.assertIn("swap failed", (self.site / "swap.log").read_text())
+
+    def test_swap_aborts_while_the_app_is_still_running(self):
+        target = fake_bundle(self.site / "installed", "1.0.0")
+        staged = fake_bundle(self.site / "new", "9.9.9")
+        keeper = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(keeper.kill)
+        script = self.site / "swap.sh"
+        script.write_text(mac_update.SWAP_SCRIPT, encoding="utf8")
+        result = subprocess.run(["/bin/sh", str(script), str(keeper.pid), str(target), str(staged),
+                                 str(self.site / "swap.log"), "30"], capture_output=True, timeout=60)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(mac_update.bundle_version(target), "1.0.0")
+        self.assertFalse(staged.exists())
+        self.assertIn("still running", (self.site / "swap.log").read_text())
 
 
 if __name__ == "__main__":

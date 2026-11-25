@@ -170,6 +170,9 @@ jobs:
       - name: Build ClassicDrop.app and DMG
         run: bash build_mac.sh python
 
+      - name: Verify the ad-hoc signature like the updater does
+        run: codesign --verify --deep --strict dist/ClassicDrop.app
+
       - name: Run bundled self-test
         # 打包好的程序先自检一遍：签名、FFmpeg、afconvert、tkdnd 全部通过才继续。
         run: |
