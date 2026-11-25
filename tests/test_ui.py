@@ -134,7 +134,7 @@ class WindowsUITests(unittest.TestCase):
 
     def test_folder_preview_edit_single_and_album_confirm_isolated_batch(self):
         with TemporaryDirectory() as tmp:
-            site = Path(tmp)
+            site = Path(tmp).resolve()
             root = site / "stock"
             device = mock_device(root)
             transfer(device, [], site / "setup", desired=playlist_edit(device.library.snapshot, [], name="新专辑"))
@@ -231,7 +231,7 @@ class WindowsUITests(unittest.TestCase):
 
     def test_offline_queue_remembers_new_playlist_until_transfer(self):
         with TemporaryDirectory() as tmp:
-            site = Path(tmp)
+            site = Path(tmp).resolve()
             device = mock_device(site / "IPC3")
             window = self.make_window()
             ui = app.App(window)
@@ -289,7 +289,7 @@ class WindowsUITests(unittest.TestCase):
 
     def test_format_prompt_queue_playlist_controls_and_library_files(self):
         with TemporaryDirectory() as tmp:
-            site = Path(tmp)
+            site = Path(tmp).resolve()
             root = site / "临时 iPod"
             device = mock_device(root)
             wav = site / "第一首.wav"
@@ -402,7 +402,7 @@ class WindowsUITests(unittest.TestCase):
 
     def test_file_drop_transfer_search_playlist_edit_and_export(self):
         with TemporaryDirectory() as tmp:
-            site = Path(tmp)
+            site = Path(tmp).resolve()
             root = site / "测试 iPod"
             mock_device(root)
             window = self.make_window()
