@@ -14,8 +14,10 @@ from version import __version__
 PAGE = "https://github.com/pretenderlu/ClassicDrop/releases/"
 OFFER_BUTTON = "打开下载页" if system.MAC else "下载并安装 v9.9.9"
 PAGE_BUTTON = "打开下载页" if system.MAC else "打开发布页"
-NEWER = UpdateInfo("v9.9.9", PAGE + "v9.9.9", "https://example.invalid/setup.exe", "ClassicDropSetup-v9.9.9.exe", 100,
-                   "a" * 64, "", "- 新增 **A**\n- 修复 B")
+NEWER = UpdateInfo("v9.9.9", PAGE + "v9.9.9",
+                   "" if system.MAC else "https://example.invalid/setup.exe",
+                   "" if system.MAC else "ClassicDropSetup-v9.9.9.exe", 0 if system.MAC else 100,
+                   "" if system.MAC else "a" * 64, "", "- 新增 **A**\n- 修复 B")
 HISTORY = (Release("v9.9.9", PAGE + "v9.9.9", "2026-12-01", "· 新增 A\n· 修复 B"),
            Release("v" + __version__, PAGE + "current", "2026-11-25", "· 这一版的内容"),
            Release("v1.0.0", PAGE + "v1.0.0", "", ""))
@@ -123,7 +125,7 @@ class UpdateInterfaceTests(unittest.TestCase):
         self.assertTrue(url.startswith(PROJECT_URL + "/issues/new?body="))
         body = parse_qs(urlsplit(url).query)["body"][0]
         self.assertIn("ClassicDrop：v" + __version__, body)
-        self.assertIn("Windows", body)
+        self.assertIn("Windows" if system.WINDOWS else "macOS", body)
         copied = self.window.clipboard_get()
         self.assertIn("ClassicDrop：v" + __version__, copied)
         self.assertIn("最近的日志", copied)
@@ -143,6 +145,7 @@ class UpdateInterfaceTests(unittest.TestCase):
         self.assertIn("division by zero", report)
         self.assertIn("ZeroDivisionError", report)
 
+    @unittest.skipIf(system.MAC, "macOS 使用内置编码器，菜单只显示说明")
     def test_apple_encoder_menu_leaves_a_final_status_in_every_outcome(self):
         ui, enc = self.ui, app.encoders
         def run(probe, yes, installed=None):
@@ -157,6 +160,12 @@ class UpdateInterfaceTests(unittest.TestCase):
                          ("Apple 编码器已启用（CoreAudioToolbox 7.10.9.0）。", False, False))
         self.assertEqual(run(("CoreAudioToolbox 7.10.9.0", "qtfiles"), True), ("已移除 Apple 编码器组件。", True, False))
         self.assertIn("来自已安装的 iTunes", run(("CoreAudioToolbox 7.10.9.0", "itunes"), False)[0])
+
+    @unittest.skipUnless(system.MAC, "只覆盖 macOS 的内置编码器说明")
+    def test_apple_encoder_menu_on_mac_shows_the_builtin_encoder_note(self):
+        with patch.object(app.messagebox, "showinfo") as info:
+            self.ui.apple_encoders()
+        self.assertIn("内置的 Apple 编码器", info.call_args.args[1])
 
     def test_quiet_check_shows_a_red_dot_and_a_manual_check_reports(self):
         ui = self.ui

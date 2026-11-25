@@ -66,6 +66,7 @@ class WindowsUITests(unittest.TestCase):
         self.addCleanup(cleanup)
         return window
 
+    @unittest.skipUnless(sys.platform == "win32", "OLE 拖放事件只在 Windows 上存在")
     def test_windows_drop_finishes_before_preview_and_releases_mouse(self):
         window = self.make_window()
         ui = app.App(window)
