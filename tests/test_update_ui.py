@@ -140,6 +140,21 @@ class UpdateInterfaceTests(unittest.TestCase):
         self.assertIn("division by zero", report)
         self.assertIn("ZeroDivisionError", report)
 
+    def test_apple_encoder_menu_leaves_a_final_status_in_every_outcome(self):
+        ui, enc = self.ui, app.encoders
+        def run(probe, yes, installed=None):
+            with patch.object(enc, "refresh"), patch.object(enc, "apple_version", return_value=probe[0]),                     patch.object(enc, "apple_source", return_value=probe[1]),                     patch.object(enc, "remove_apple") as removed,                     patch.object(enc, "install_apple", side_effect=lambda report: report("正在提取 Apple 编码器组件…") or installed),                     patch.object(app.messagebox, "askyesno", return_value=yes), patch.object(app.messagebox, "showinfo") as info:
+                ui.apple_encoders()
+                self.settle(lambda: "正在" not in ui.status.get())
+            return ui.status.get(), removed.called, info.called
+        self.assertEqual(run((None, None), True, "CoreAudioToolbox 7.10.9.0"),
+                         ("Apple 编码器已启用（CoreAudioToolbox 7.10.9.0）。", False, True))
+        self.assertEqual(run((None, None), False)[0], "Apple 编码器未启用。")
+        self.assertEqual(run(("CoreAudioToolbox 7.10.9.0", "qtfiles"), False),
+                         ("Apple 编码器已启用（CoreAudioToolbox 7.10.9.0）。", False, False))
+        self.assertEqual(run(("CoreAudioToolbox 7.10.9.0", "qtfiles"), True), ("已移除 Apple 编码器组件。", True, False))
+        self.assertIn("来自已安装的 iTunes", run(("CoreAudioToolbox 7.10.9.0", "itunes"), False)[0])
+
     def test_quiet_check_shows_a_red_dot_and_a_manual_check_reports(self):
         ui = self.ui
         self.check(OSError("offline"))

@@ -1271,21 +1271,26 @@ class App:
         def done(result):
             version, source = result
             if version and source == "qtfiles":
+                self.status.set(f"Apple 编码器已启用（{version}）。")
                 if messagebox.askyesno("Apple 编码器",
                                        f"Apple 编码器已启用（{version}）。转换 ALAC 和 AAC 时使用 Apple 的编码器。"
                                        "要移除这些组件吗？", parent=self.window):
                     encoders.remove_apple()
                     self.status.set("已移除 Apple 编码器组件。")
             elif version:
+                self.status.set(f"Apple 编码器已启用（{version}），来自已安装的 iTunes。")
                 messagebox.showinfo("Apple 编码器",
                                     f"正在使用电脑上已安装的 iTunes 提供的 Apple 编码器（{version}），"
                                     "不需要另外下载。", parent=self.window)
-            elif messagebox.askyesno("Apple 编码器",
-                                     "转换 AAC 时可以改用 Apple 的编码器，音质更好。程序会从 Apple 官网下载 iTunes "
-                                     "安装包（约 200 MB），只提取编码器需要的组件（约 43 MB），不会安装 iTunes。要继续吗？",
-                                     parent=self.window):
-                self._work("正在下载 iTunes 安装包…", encoders.install_apple, installed)
+            else:
+                self.status.set("Apple 编码器未启用。")
+                if messagebox.askyesno("Apple 编码器",
+                                       "转换 AAC 时可以改用 Apple 的编码器，音质更好。程序会从 Apple 官网下载 iTunes "
+                                       "安装包（约 200 MB），只提取编码器需要的组件（约 43 MB），不会安装 iTunes。要继续吗？",
+                                       parent=self.window):
+                    self._work("正在下载 iTunes 安装包…", encoders.install_apple, installed)
         def installed(version):
+            self.status.set(f"Apple 编码器已启用（{version}）。")
             messagebox.showinfo("Apple 编码器", f"Apple 编码器已启用（{version}）。", parent=self.window)
         self._work("正在检查 Apple 编码器…", checked, done)
 
