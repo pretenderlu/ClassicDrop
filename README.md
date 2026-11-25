@@ -1,10 +1,10 @@
-# ClassicDrop 1.6.0
+# ClassicDrop 1.6.1
 
 Windows 与 macOS 下的 iPod classic 原厂曲库工具。面向已经有原厂曲库的 IPC3（2009 年末 160 GB 薄款）。所有日常操作都在本地完成。iPod nano 第 3、4 代使用同一种曲库，也可以读写，但还没有在真机上验证过，见「支持的机型」。支持 Windows 10/11 x64 与 macOS 12+（Apple 芯片和 Intel）；在 Windows 11 ARM64 电脑上以模拟方式运行 x64 版（Windows 10 ARM64 不能运行 x64 程序，不支持）。
 
 ## 安装与更新
 
-从 [Releases](https://github.com/pretenderlu/ClassicDrop/releases) 下载 `ClassicDropSetup-v1.6.0.exe` 并运行。程序装在 `%LOCALAPPDATA%\Programs\ClassicDrop`，安装和卸载都不需要管理员权限。同一页面的 `ClassicDrop-Windows-x64.zip` 是免安装版，解压后运行其中的 ClassicDrop.exe。
+从 [Releases](https://github.com/pretenderlu/ClassicDrop/releases) 下载 `ClassicDropSetup-v1.6.1.exe` 并运行。程序装在 `%LOCALAPPDATA%\Programs\ClassicDrop`，安装和卸载都不需要管理员权限。同一页面的 `ClassicDrop-Windows-x64.zip` 是免安装版，解压后运行其中的 ClassicDrop.exe。
 
 启动后程序会向 GitHub 查询最新的正式版本。窗口右下角有 GitHub 链接、「反馈」和当前版本号。点「反馈」会打开一个小窗口，列出诊断信息（软件版本、Windows 版本、iPod 机型、最近一次报错和最近的运行日志）供先过目，再复制到剪贴板并打开 GitHub 的新建 Issue 页面。运行日志存在 `%LOCALAPPDATA%\ClassicDrop\Logs`，最多 3 个文件、每个 1 MB，会自动轮替。日志里会记录歌曲文件名；设备序列号、FireWire GUID 和设备名称一律不写入，写日志和诊断信息前会被替换成「[已隐藏]」，你的用户文件夹显示为 `~`。点版本号可以查看各个版本的更新记录。有新版本时，版本号旁边会出现一个红点，更新记录里会多出「下载并安装」按钮。点它之后程序下载安装包，核对 GitHub 提供的 SHA-256 校验值，再自动安装并重新打开。正在传歌，或待传列表里还有歌曲时，需要先处理完再更新。也可以随时点「工具与备份 → 检查更新」。下载失败时可以重试，或打开发布页手动下载。查询只访问 GitHub 的发布接口，不上传任何曲库或设备信息。
 
@@ -55,7 +55,7 @@ nano 第 3、4 代的曲库格式和校验方式与 classic 相同。程序按�
 
 如果旧版传入的歌在 iPod 上缺封面，连接设备后点「工具与备份 → 补齐设备封面」。程序从机内音频读取内嵌图，只更新原厂曲库索引和封面缩略图。状态栏会显示补齐数量和缺少可用图片的歌曲数。操作完成后即可安全弹出，在 iPod 上打开歌曲查看。
 
-旧版中文 FLAC 的标签可能混用 UTF-8 和 GBK，ClassicDrop 会按字段解码。转码时如果缺少歌手，并且文件位于「歌手 / 年份-专辑」或其同名专辑子目录中，会用歌手文件夹补全。对于文件头时长与实际音频不符的 FLAC，程序会完整解码并校验转换前后的采样，再按实际时长写入。
+旧版中文 FLAC 的标签可能混用 UTF-8 和 GBK，ClassicDrop 会按字段解码。转码时如果缺少歌手，并且文件位于「歌手 / 年份-专辑」或其同名专辑子目录中，会用歌手文件夹补全。对于文件头时长与实际音频不符的 FLAC，程序会完整解码并校验转换前后的采样，再按实际时长写入。个别 FLAC 在音频末尾带有标签残留或无效字节，严格解码会报错：此时程序容忍性地完整解码一遍，核对采样数和文件自带的 MD5 校验值完全一致的按完好音频转换并记入日志；校验缺失或核对不上的按音频不完整拒绝传入，并给出检查提示。
 
 也可以把音乐文件直接拖到 EXE 图标上加入待传列表。窗口内按 Ctrl+O 选择歌曲，Ctrl+Enter 传入，F5 刷新设备。
 

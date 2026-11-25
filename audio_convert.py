@@ -1,5 +1,6 @@
 """Prepare local audio for the stock firmware before opening the device for writing."""
 
+import hashlib
 import os
 import re
 import shutil
@@ -378,8 +379,9 @@ def _ffmpeg(arguments):
     return process.stdout.strip()
 
 
-def _pcm_md5(path, rate, channels, codec):
-    output = _ffmpeg(["-protocol_whitelist", "file", "-err_detect", "crccheck+explode", "-i", str(path),
+def _pcm_md5(path, rate, channels, codec, input_args=()):
+    output = _ffmpeg(["-protocol_whitelist", "file", "-err_detect", "crccheck+explode",
+                      *input_args, "-i", str(path),
                       "-map", "0:a:0", "-c:a", codec, "-ar", str(rate), "-ac", str(channels),
                       "-threads:a", "1", "-fflags", "+bitexact", "-flags:a", "+bitexact", "-f", "md5", "pipe:1"])
     match = re.fullmatch(rb"MD5=([0-9a-fA-F]{32})", output)
@@ -388,7 +390,9 @@ def _pcm_md5(path, rate, channels, codec):
     return int(match[1], 16)
 
 
-def _verify_duration(source, info, destination, encoded):
+def _verify_duration(source, info, destination, encoded, pcm=None):
+    """pcm may be a (path, input_args) pair that decodes the source's samples cleanly."""
+    pcm_path, pcm_input = pcm or (source, ())
     rate, channels = encoded.sample_rate, encoded.channels
     if info.length <= 0 or abs(encoded.length - info.length) <= 1.01 / rate:
         return
@@ -399,17 +403,65 @@ def _verify_duration(source, info, destination, encoded):
     # FLAC headers can overstate duration and MP4 edit lists can trim encoder delay.
     bits = encoded.bits_per_sample
     codec = f"pcm_s{bits}le"
-    pcm = _pcm_md5(source, rate, channels, codec)
-    if pcm != _pcm_md5(destination, rate, channels, codec):
+    pcm_md5 = _pcm_md5(pcm_path, rate, channels, codec, pcm_input)
+    if pcm_md5 != _pcm_md5(destination, rate, channels, codec):
         raise ValueError("转换前后的音频采样不一致。" + lengths)
     if suffix == ".m4a":
         return
     native_codec = {8: "pcm_s8", 16: "pcm_s16le", 24: "pcm_s24le", 32: "pcm_s32le"}.get(info.bits_per_sample)
     if info.md5_signature and native_codec:
         if (info.sample_rate, info.channels, info.bits_per_sample) != (rate, channels, bits):
-            pcm = _pcm_md5(source, info.sample_rate, info.channels, native_codec)
-        if pcm != info.md5_signature:
+            pcm_md5 = _pcm_md5(pcm_path, info.sample_rate, info.channels, native_codec, pcm_input)
+        if pcm_md5 != info.md5_signature:
             raise ValueError("原始 FLAC 的音频采样与文件自带的 MD5 不一致。" + lengths)
+
+
+FLAC_PCM = {8: ("pcm_s8", "s8"), 16: ("pcm_s16le", "s16le"),
+            24: ("pcm_s24le", "s24le"), 32: ("pcm_s32le", "s32le")}
+
+
+def _flac_recovery(source, info, folder):
+    """Prove a FLAC whose strict decode fails is intact outside the bad bytes.
+
+    Tolerantly decodes the whole stream to the source's native PCM and compares it with
+    the STREAMINFO checksum and total_samples. Returns (path, input_args) of a byte-exact
+    clean copy to feed the encoders; raises a friendly error when it cannot be proven.
+    """
+    codec, fmt = FLAC_PCM.get(info.bits_per_sample, (None, None))
+    if codec is None:
+        raise ValueError("内部有无法解码的数据，音频不完整，未传入 iPod。可能是下载或拷贝不完整。"
+                         "可以用 foobar2000 的「验证完整性」检查，或重新获取文件后再传。")
+    raw = Path(folder) / "clean.pcm"
+    proc = subprocess.run([get_ffmpeg_exe(), "-nostdin", "-hide_banner", "-loglevel", "error",
+                           "-protocol_whitelist", "file", "-i", str(source), "-map", "0:a:0",
+                           "-vn", "-sn", "-dn", "-c:a", codec, "-ar", str(info.sample_rate),
+                           "-ac", str(info.channels), "-threads:a", "1", "-fflags", "+bitexact",
+                           "-flags:a", "+bitexact", "-f", fmt, str(raw)],
+                          stdin=subprocess.DEVNULL, capture_output=True, **system.NO_WINDOW)
+    detail = proc.stderr.decode("utf8", "replace").strip()
+    if detail:
+        diagnostics.log.warning("%s 容错解码：%s", source.name, detail[-900:])
+    digest = hashlib.md5()
+    size = 0
+    if not proc.returncode and raw.exists():
+        with open(raw, "rb") as stream:
+            for chunk in iter(lambda: stream.read(1 << 20), b""):
+                digest.update(chunk)
+                size += len(chunk)
+    unit = info.bits_per_sample // 8 * info.channels
+    samples, odd = divmod(size, unit)
+    if not info.md5_signature:
+        raise ValueError("内部有无法解码的数据，音频不完整，未传入 iPod。文件没有自带校验值，"
+                         "无法确认音频完整。可以用 foobar2000 的「验证完整性」检查，或重新获取文件后再传。")
+    if samples != info.total_samples and samples < info.total_samples and not odd:
+        raise ValueError("内部有无法解码的数据，音频不完整，未传入 iPod"
+                         f"（约在第 {int(samples / info.sample_rate)} 秒附近）。可能是下载或拷贝不完整。"
+                         "可以用 foobar2000 的「验证完整性」检查，或重新获取文件后再传。")
+    if proc.returncode or odd or samples != info.total_samples or \
+            int.from_bytes(digest.digest(), "big") != info.md5_signature:
+        raise ValueError("内部有无法解码的数据，音频不完整，未传入 iPod。可能是下载或拷贝不完整。"
+                         "可以用 foobar2000 的「验证完整性」检查，或重新获取文件后再传。")
+    return raw, ["-f", fmt, "-ar", str(info.sample_rate), "-ac", str(info.channels)]
 
 
 def _convert(source, mode, destination):
@@ -437,9 +489,10 @@ def _convert(source, mode, destination):
     decoder = ["-c:a", info.pcm_decoder] if hasattr(info, "pcm_decoder") else []
     # Bound the stereo mix before encoding multichannel DSD, including the floating-point AAC path.
     downmix = ["-af", f"aresample={rate}:ochl=stereo:rematrix_maxval=1"] if suffix in DSD_FILES and info.channels > 2 else []
-    decode = [*decoder, "-i", str(source), "-map", "0:a:0", "-vn", "-sn", "-dn",
-              *downmix, "-ar", str(rate), "-ac", str(channels), "-threads:a", "1",
-              "-fflags", "+bitexact", "-flags:a", "+bitexact"]
+    def decode_args(origin, origin_input=()):
+        return [*decoder, *origin_input, "-i", str(origin), "-map", "0:a:0", "-vn", "-sn", "-dn",
+                *downmix, "-ar", str(rate), "-ac", str(channels), "-threads:a", "1",
+                "-fflags", "+bitexact", "-flags:a", "+bitexact"]
     candidates = []
     if mode == "aac":
         apple = encoders.qaac()
@@ -460,53 +513,76 @@ def _convert(source, mode, destination):
         if bundle:
             exe, env = bundle
             candidates.append(("refalac", exe, env, raw_args, raw_format))
-    done = False
-    if encoders.afconvert():
-        layout = "-l", "Stereo" if channels == 2 else "Mono"
-        if mode == "aac":
-            af_args, pcm = (["-f", "m4af", "-d", "aac", "-b", "256000" if channels == 2 else "128000",
-                             "-c", str(channels), *layout, "-s", "2", "-q", "127"], "pcm_f32le")
-        else:
-            af_args = ["-f", "m4af", "-d", "alac", "-c", str(channels), *layout]
-            pcm = "pcm_s24le" if bits == 24 else "pcm_s16le"
-        try:
-            encoders.afconvert_encode(af_args, decode, pcm, destination)
-            _unstamp(destination)
-        except Exception as exc:
-            destination.unlink(missing_ok=True)
-            diagnostics.log.warning("afconvert %s 编码失败，改用下一种编码器。%s", mode.upper(), exc)
-        else:
-            diagnostics.log.info("afconvert %s 编码：%s", mode.upper(), source.name)
+
+    def encode(origin, origin_input=()):
+        decode = decode_args(origin, origin_input)
+        done = False
+        if encoders.afconvert():
+            layout = "-l", "Stereo" if channels == 2 else "Mono"
+            if mode == "aac":
+                af_args, pcm = (["-f", "m4af", "-d", "aac", "-b", "256000" if channels == 2 else "128000",
+                                 "-c", str(channels), *layout, "-s", "2", "-q", "127"], "pcm_f32le")
+            else:
+                af_args = ["-f", "m4af", "-d", "alac", "-c", str(channels), *layout]
+                pcm = "pcm_s24le" if bits == 24 else "pcm_s16le"
+            try:
+                encoders.afconvert_encode(af_args, decode, pcm, destination)
+                _unstamp(destination)
+            except Exception as exc:
+                destination.unlink(missing_ok=True)
+                diagnostics.log.warning("afconvert %s 编码失败，改用下一种编码器。%s", mode.upper(), exc)
+            else:
+                diagnostics.log.info("afconvert %s 编码：%s", mode.upper(), source.name)
+                done = True
+        for label, exe, env, tool_args, raw in candidates:
+            if done:
+                break
+            try:
+                encoders.pipe_encode(exe, env, tool_args, decode, raw, destination)
+                _unstamp(destination)
+            except Exception as exc:
+                destination.unlink(missing_ok=True)
+                diagnostics.log.warning("%s 编码失败，改用下一种编码器。%s", label, exc)
+                continue
+            diagnostics.log.info("%s 编码：%s", label, source.name)
             done = True
-    for label, exe, env, tool_args, raw in candidates:
-        if done:
             break
-        try:
-            encoders.pipe_encode(exe, env, tool_args, decode, raw, destination)
-            _unstamp(destination)
-        except Exception as exc:
-            destination.unlink(missing_ok=True)
-            diagnostics.log.warning("%s 编码失败，改用下一种编码器。%s", label, exc)
-            continue
-        diagnostics.log.info("%s 编码：%s", label, source.name)
-        done = True
-        break
-    if not done:
-        _ffmpeg(["-n", "-protocol_whitelist", "file", *decoder, "-i", str(source), "-map", "0:a:0", "-vn", "-sn", "-dn",
-                 "-map_metadata", "0", "-map_chapters", "-1", "-metadata", "creation_time=",
-                 *downmix, *codec, "-ar", str(rate), "-ac", str(channels), "-threads:a", "1", "-fflags", "+bitexact",
-                 "-flags:a", "+bitexact", "-f", "ipod", str(destination)])
-    _metadata(source, audio, destination)
-    encoded = mp4_audio(destination).info
-    want = "mp4a.40.2" if mode == "aac" else "alac"
-    if (encoded.codec != want or encoded.sample_rate != rate or encoded.channels != channels or encoded.length <= 0
-            or (mode != "aac" and encoded.bits_per_sample != bits)):
-        depth = "" if mode == "aac" else f"、{bits} 位"
-        raise ValueError(f"音频参数未通过校验。预期 {want}、{rate} Hz、{channels} 声道{depth}。"
-                         f"实际为 {encoded.codec}、{encoded.sample_rate} Hz、{encoded.channels} 声道、"
-                         f"{encoded.bits_per_sample} 位、{encoded.length:.3f} 秒。")
-    if mode != "aac":
-        _verify_duration(source, info, destination, encoded)
+        if not done:
+            _ffmpeg(["-n", "-protocol_whitelist", "file", *decoder, *origin_input, "-i", str(origin),
+                     "-map", "0:a:0", "-vn", "-sn", "-dn",
+                     "-map_metadata", "0", "-map_chapters", "-1", "-metadata", "creation_time=",
+                     *downmix, *codec, "-ar", str(rate), "-ac", str(channels), "-threads:a", "1", "-fflags", "+bitexact",
+                     "-flags:a", "+bitexact", "-f", "ipod", str(destination)])
+
+    pcm_source = (source, ())
+    try:
+        encode(source)
+    except ValueError as exc:
+        if suffix != ".flac":
+            raise
+        diagnostics.log.warning("%s 严格解码失败：%s", source.name, exc)
+        clean, clean_input = _flac_recovery(source, info, destination.parent)
+        diagnostics.log.warning("「%s」含有音频以外的无效数据，已核对采样数和 MD5 完全一致，按完好音频转换",
+                                source.name)
+        destination.unlink(missing_ok=True)
+        encode(clean, clean_input)
+        pcm_source = (clean, clean_input)
+    try:
+        _metadata(source, audio, destination)
+        encoded = mp4_audio(destination).info
+        want = "mp4a.40.2" if mode == "aac" else "alac"
+        if (encoded.codec != want or encoded.sample_rate != rate or encoded.channels != channels or encoded.length <= 0
+                or (mode != "aac" and encoded.bits_per_sample != bits)):
+            depth = "" if mode == "aac" else f"、{bits} 位"
+            raise ValueError(f"音频参数未通过校验。预期 {want}、{rate} Hz、{channels} 声道{depth}。"
+                             f"实际为 {encoded.codec}、{encoded.sample_rate} Hz、{encoded.channels} 声道、"
+                             f"{encoded.bits_per_sample} 位、{encoded.length:.3f} 秒。")
+        if mode != "aac":
+            _verify_duration(source, info, destination, encoded, pcm_source)
+    finally:
+        if pcm_source[0] != source:
+            # The proven PCM copy can be hundreds of MB; drop it as soon as the file is checked.
+            Path(pcm_source[0]).unlink(missing_ok=True)
 
 
 @contextmanager
