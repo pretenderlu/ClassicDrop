@@ -87,7 +87,8 @@ class BrowseTests(unittest.TestCase):
                 self.assertGreater(red, 240)
                 self.assertLess(green + blue, 20)
         ui = self.ui
-        self.assertEqual((set(ui.covers), ui.sharp_covers), (with_art, {}))
+        # The large pictures are read in the background as soon as the strip shows them, so they may already be here.
+        self.assertEqual(set(ui.covers), with_art)
         ui.set_browse("album")
         self.pick("甲")
         deadline = time.monotonic() + 10
