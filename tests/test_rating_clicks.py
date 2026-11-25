@@ -236,6 +236,28 @@ class RatingClickTests(unittest.TestCase):
         self.click("0", 3)
         self.assertFalse(self.ui.pending_ratings)
 
+    def test_write_action_flushes_pending_ratings_and_theme_keeps_notice(self):
+        self.ui._rating_hover(fake_event(y=self.row_y("0")))
+        self.click("0", 4)
+        self.assertTrue(self.ui.rating_note.winfo_manager())
+        self.ui.set_theme("dark")
+        self.addCleanup(app.theme.use, "light")
+        self.window.update()
+        self.assertTrue(self.ui.rating_note.winfo_manager())
+        self.assertEqual(self.ui.rating_count["text"], "有 1 首歌曲的评级待保存")
+        with patch.object(app.simpledialog, "askstring", return_value="星标后歌单"), \
+                patch.object(app.messagebox, "showerror") as error, \
+                patch.object(app, "device_covers") as covers:
+            self.ui.tree.selection_set("0")
+            self.ui.change_playlist()
+            self.settle(lambda: not self.ui.pending_ratings and len(self.ui.device.library.snapshot.playlists) == 1,
+                        seconds=15)
+        error.assert_not_called()
+        covers.assert_not_called()
+        snap = Device.open(self.root).library.snapshot
+        self.assertEqual(snap.tracks[0].rating, 80)
+        self.assertEqual([p.name for p in snap.playlists], ["星标后歌单"])
+
 
 if __name__ == "__main__":
     unittest.main()

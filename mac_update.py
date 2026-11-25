@@ -35,7 +35,7 @@ def cannot_replace(bundle):
     return None
 
 
-def _run(command, report):
+def _run(command):
     p = subprocess.run(command, capture_output=True, text=True, timeout=300)
     if p.returncode:
         raise OSError(f"{' '.join(map(str, command))} 失败（退出码 {p.returncode}）："
@@ -60,16 +60,16 @@ def stage_update(dmg, bundle, version, report=lambda _: None):
     try:
         report("正在装载更新包…")
         _run(["hdiutil", "attach", "-nobrowse", "-readonly", "-noautoopen",
-              "-mountpoint", str(mount), str(dmg)], report)
+              "-mountpoint", str(mount), str(dmg)])
         try:
             shutil.rmtree(staged, ignore_errors=True)
             report("正在准备新版本…")
-            _run(["ditto", str(mount / "ClassicDrop.app"), str(staged)], report)
+            _run(["ditto", str(mount / "ClassicDrop.app"), str(staged)])
         finally:
             detach = subprocess.run(["hdiutil", "detach", str(mount)], capture_output=True)
             if detach.returncode:
                 subprocess.run(["hdiutil", "detach", "-force", str(mount)], capture_output=True)
-        _run(["codesign", "--verify", "--deep", "--strict", str(staged)], report)
+        _run(["codesign", "--verify", "--deep", "--strict", str(staged)])
         got = bundle_version(staged)
         if got != version.lstrip("v"):
             raise ValueError(f"更新包版本不匹配：包内为 {got or '未知'}，应为 {version.lstrip('v')}。")
@@ -84,6 +84,12 @@ def stage_update(dmg, bundle, version, report=lambda _: None):
 SWAP_SCRIPT = """#!/bin/sh
 # Waits for the app to exit, then swaps in the staged update. Args: pid target staged log [tries].
 exec >>"$4" 2>&1
+cleanup() {
+    case "$0" in
+        */classicdrop-swap-*/swap.sh) rm -rf "$(dirname "$0")" ;;
+    esac
+}
+trap cleanup EXIT
 i=0
 tries=${5:-600}
 while [ $i -lt "$tries" ] && kill -0 "$1" 2>/dev/null; do

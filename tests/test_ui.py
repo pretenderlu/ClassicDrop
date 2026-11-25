@@ -2,7 +2,6 @@ import ctypes
 import os
 from dataclasses import replace
 from pathlib import Path
-import shutil
 import sys
 import time
 from types import SimpleNamespace

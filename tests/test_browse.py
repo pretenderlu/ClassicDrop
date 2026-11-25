@@ -235,7 +235,7 @@ class BrowseTests(unittest.TestCase):
         stand_in = flow._image(0, "right", 64)
         self.assertIs(stand_in, flow.stand_ins["right", 64])
         deadline = time.monotonic() + 10
-        while (flow.pending or not flow.finished.empty()) and time.monotonic() < deadline:
+        while (flow.pending or not flow.finished.empty() or ui.cover_pending) and time.monotonic() < deadline:
             self.window.update()
             time.sleep(0.01)
         self.assertEqual(flow.pending, set())
@@ -254,6 +254,17 @@ class BrowseTests(unittest.TestCase):
         flow.finished.put((stale, ready[next(n for n in ready if n[1] == "left")][1]))
         flow._collect()
         self.assertEqual(flow.cache, {})
+
+    def test_cache_eviction_keeps_active_frame_covers(self):
+        flow = self.ui.flow
+        flow.redraw()
+        active = set(flow._frame_keys)
+        self.assertTrue(active)
+        for i in range(720):
+            flow.cache[("dummy", i, 64)] = (1, f"img-{i}")
+        flow._trim_cache()
+        self.assertLessEqual(len(flow.cache), 550 + len(active))
+        self.assertTrue(active <= set(flow.cache))
 
     def test_an_album_is_listed_in_track_order_with_numbers(self):
         ui = self.ui

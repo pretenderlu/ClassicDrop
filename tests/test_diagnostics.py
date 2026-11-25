@@ -31,7 +31,10 @@ class DiagnosticsTests(unittest.TestCase):
         diagnostics.setup(self.site / "logs")
         diagnostics.setup(self.site / "logs")
         handlers = [h for h in diagnostics.log.handlers if isinstance(h, RotatingFileHandler)]
+        ipod_handlers = [h for h in logging.getLogger("iPodDB").handlers if isinstance(h, RotatingFileHandler)]
         self.assertEqual(len(handlers), 1)
+        self.assertEqual(ipod_handlers, handlers)
+        self.assertIs(ipod_handlers[0], handlers[0])
         self.assertEqual((handlers[0].maxBytes, handlers[0].backupCount), (1_000_000, 2))
         self.assertEqual(diagnostics.log.level, logging.INFO)
         self.assertEqual(logging.getLogger("iPodDB").level, logging.WARNING)
@@ -58,7 +61,7 @@ class DiagnosticsTests(unittest.TestCase):
             diagnostics.remember("操作失败", exc)
         text = self.file().read_text(encoding="utf8")
         self.assertIn("操作失败", text)
-        self.assertIn("Traceback", text)
+        self.assertEqual(text.count("Traceback"), 1)
         self.assertIn("[已隐藏]", text)
         for secret in ("SECRET-SERIAL", "0011223344556677", *variants - {str(home)}):
             self.assertNotIn(secret, text)
@@ -96,7 +99,7 @@ class DiagnosticsTests(unittest.TestCase):
         from types import SimpleNamespace
         import app
         device = SimpleNamespace(root=self.site, guid=bytes.fromhex("0011223344556677"), profile=None,
-                                 usb_instance="USB\VID_05AC&PID_1261\0011223344556677", disk_ids=("ZZ1234567AB",),
+                                 usb_instance=r"USB\VID_05AC&PID_1261\0011223344556677", disk_ids=("ZZ1234567AB",),
                                  library=SimpleNamespace(snapshot=SimpleNamespace(device_name="小明的 iPod")))
         app.App._hide_device(None, device)
         self.assertEqual(diagnostics.scrub("ZZ1234567AB 0011223344556677 小明的 iPod"), "[已隐藏] [已隐藏] [已隐藏]")

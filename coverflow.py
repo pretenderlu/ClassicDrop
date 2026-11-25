@@ -81,6 +81,7 @@ class CoverFlow(tk.Canvas):
         self.finished = SimpleQueue()
         self.epoch = 0
         self.stand_ins = {}
+        self._frame_keys = set()
         # Timers belong to the window, so that closing or rebuilding it never leaves one pointing at this strip.
         self.clock = self.winfo_toplevel()
         self.bind("<Destroy>", lambda _: self._stop(closing=True))
@@ -151,6 +152,16 @@ class CoverFlow(tk.Canvas):
             self.timer = self.clock.after(16, self._glide)
         self.redraw()
 
+    def _trim_cache(self, limit=700, keep=550):
+        """Evict oldest cached covers once over limit without dropping anything drawn in this frame."""
+        if len(self.cache) <= limit:
+            return
+        for key in list(self.cache):
+            if len(self.cache) <= keep:
+                break
+            if key not in self._frame_keys:
+                self.cache.pop(key, None)
+
     def _image(self, art, kind, size):
         """The picture to draw now. A leaning cover that is not ready yet is ordered and a stand-in returned."""
         found = self.picture(art)
@@ -158,10 +169,11 @@ class CoverFlow(tk.Canvas):
         name = (art, kind, size)
         have = self.cache.get(name)
         if have and have[0] >= quality:
+            # Refresh LRU position while keeping the exact tuple identity.
+            self.cache[name] = self.cache.pop(name)
             return have[1]
         if kind == "front":
-            if len(self.cache) > 700:
-                self.cache.clear()
+            self.cache.pop(name, None)
             self.cache[name] = quality, ImageTk.PhotoImage(cover_with_reflection(source, size), master=self)
             return self.cache[name][1]
         job = (*name, quality, self.epoch)
@@ -171,8 +183,11 @@ class CoverFlow(tk.Canvas):
             if self.collector is None:
                 self.collector = self.clock.after(12, self._collect)
         if have:
+            self.cache[name] = self.cache.pop(name)
             return have[1]
         if (kind, size) not in self.stand_ins:
+            if len(self.stand_ins) >= 8:
+                self.stand_ins.pop(next(iter(self.stand_ins)))
             # A plain panel, quieter than a row of placeholder pictures during the moment it is visible.
             plain = Image.new("RGB", (64, 64), theme.LINE)
             self.stand_ins[kind, size] = ImageTk.PhotoImage(leaning_cover(plain, size, kind == "left"), master=self)
@@ -196,12 +211,15 @@ class CoverFlow(tk.Canvas):
                 job, picture = self.finished.get_nowait()
                 self.pending.discard(job)
                 art, kind, size, quality, epoch = job
-                have = self.cache.get((art, kind, size))
+                name = (art, kind, size)
+                have = self.cache.get(name)
                 if picture is not None and epoch == self.epoch and not (have and have[0] >= quality):
-                    self.cache[art, kind, size] = quality, ImageTk.PhotoImage(picture, master=self)
+                    self.cache.pop(name, None)
+                    self.cache[name] = quality, ImageTk.PhotoImage(picture, master=self)
                     arrived += 1
         except Empty:
             pass
+        self._trim_cache()
         if arrived:
             self.redraw()
         if (self.pending or not self.finished.empty()) and self.collector is None:
@@ -210,6 +228,7 @@ class CoverFlow(tk.Canvas):
     def redraw(self):
         self.delete("all")
         self.spots = []
+        self._frame_keys = set()
         width, height = self.winfo_width(), self.winfo_height()
         if not self.items or width < 20 or height < 20:
             return
@@ -223,15 +242,19 @@ class CoverFlow(tk.Canvas):
             art = self.items[index][3]
             if abs(offset) < 0.5:
                 x = middle + round(offset * FIRST * size)
+                self._frame_keys.add((art, "front", size))
                 self.create_image(x, top, anchor="n", image=self._image(art, "front", size))
                 self.spots.append((index, x - size // 2, x + size // 2))
             else:
                 side = -1 if offset < 0 else 1
+                kind = "left" if side < 0 else "right"
                 x = middle + round(side * (FIRST + (abs(offset) - 1) * STEP) * size)
                 lean = round(LEAN[0] * size)
+                self._frame_keys.add((art, kind, size))
                 self.create_image(x, top + round(size * (1 - LEAN[1]) * 0.9), anchor="n",
-                                  image=self._image(art, "left" if side < 0 else "right", size))
+                                  image=self._image(art, kind, size))
                 self.spots.append((index, x - lean // 2, x + lean // 2))
+        self._trim_cache()
         key, title, detail, _ = self.items[self.target]
         base = height - self.px(34)
         self.create_text(middle, base, text=title, fill=theme.FLOW_TITLE, font=(theme.FONT, 11, "bold"), width=width - self.px(40))

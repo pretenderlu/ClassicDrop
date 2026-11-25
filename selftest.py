@@ -5,6 +5,7 @@ x64 build works under Windows 11 ARM64 emulation; makes no window and touches no
 """
 import json
 from pathlib import Path
+import platform
 import tempfile
 
 from version import __version__
@@ -42,7 +43,7 @@ def self_test(output):
         import subprocess
         from imageio_ffmpeg import get_ffmpeg_exe
         out = subprocess.run([get_ffmpeg_exe(), "-nostdin", "-hide_banner", "-version"],
-                             capture_output=True, text=True, timeout=30)
+                             capture_output=True, text=True, timeout=30, **system.NO_WINDOW)
         if out.returncode or "ffmpeg version" not in out.stdout:
             raise ValueError(out.stderr[-200:] or "ffmpeg -version 失败")
         return out.stdout.splitlines()[0]
@@ -55,7 +56,6 @@ def self_test(output):
         import subprocess
         import wave
         import encoders
-        import system
         mac = system.MAC
         tool = encoders.afconvert() if mac else encoders.refalac()
         if not tool:
@@ -81,13 +81,13 @@ def self_test(output):
             else:
                 exe, env = tool
                 encoded = subprocess.run([exe, str(source), "-o", str(destination), "--silent"],
-                                         capture_output=True, env=env, timeout=60)
+                                         capture_output=True, env=env, timeout=60, **system.NO_WINDOW)
                 if encoded.returncode or not destination.is_file():
                     raise ValueError(encoded.stderr.decode("utf8", "replace")[-200:] or "refalac 编码失败")
             from imageio_ffmpeg import get_ffmpeg_exe
             decoded = subprocess.run([get_ffmpeg_exe(), "-nostdin", "-hide_banner", "-loglevel", "error",
                               "-i", str(destination), "-f", "null", "-"],
-                             capture_output=True, timeout=30)
+                             capture_output=True, timeout=30, **system.NO_WINDOW)
             if decoded.returncode:
                 raise ValueError("ffmpeg 无法解码编码器输出")
         return tool if mac else tool[0]
@@ -107,7 +107,7 @@ def self_test(output):
         "version": __version__,
         "process_arch": cpuarch.process_arch(),
         "host_arch": cpuarch.host_arch(),
-        "machine": __import__("platform").machine(),
+        "machine": platform.machine(),
         "wasmtime_dll": str(checks["wasmtime"]["detail"]) if checks["wasmtime"]["ok"] else "",
         "checks": checks,
         "ok": all(item["ok"] for item in checks.values()),

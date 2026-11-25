@@ -51,6 +51,16 @@ jobs:
         shell: pwsh
         run: .\build.ps1 -Python python
 
+      - name: Run bundled self-test
+        # 打包好的程序先自检一遍：签名、FFmpeg、refalac、tkdnd 全部通过才继续。
+        shell: pwsh
+        run: |
+          $json = "$env:RUNNER_TEMP\self-test.json"
+          $p = Start-Process -PassThru -FilePath "dist\ClassicDrop\ClassicDrop.exe" -ArgumentList "--self-test", $json
+          if (-not $p.WaitForExit(120000)) { $p.Kill(); throw "self-test timed out" }
+          Get-Content $json
+          if ($p.ExitCode -ne 0) { exit 1 }
+
       - name: Create portable ZIP
         run: python -c "import shutil; shutil.make_archive('dist/ClassicDrop-Windows-x64', 'zip', 'dist', 'ClassicDrop')"
 
@@ -70,16 +80,6 @@ jobs:
             dist/installer/ClassicDropSetup-*.exe
           if-no-files-found: error
           retention-days: 30
-
-      - name: Run bundled self-test
-        # 打包好的程序先自检一遍：签名、FFmpeg、refalac、tkdnd 全部通过才继续。
-        shell: pwsh
-        run: |
-          $json = "$env:RUNNER_TEMP\self-test.json"
-          $p = Start-Process -PassThru -FilePath "dist\ClassicDrop\ClassicDrop.exe" -ArgumentList "--self-test", $json
-          if (-not $p.WaitForExit(120000)) { $p.Kill(); throw "self-test timed out" }
-          Get-Content $json
-          if ($p.ExitCode -ne 0) { exit 1 }
 
   arm64-smoke:
     # 在 ARM64 runner 上验证 x64 包能在模拟环境下正常启动（wasmtime 等原生组件）。
@@ -140,15 +140,8 @@ jobs:
       - name: Check Tk works
         run: python -c "import tkinter; tkinter.Tk().destroy()"
 
-      - name: Show afconvert help (diagnostics)
-        run: afconvert -hf 2>&1 | head -60 || true
-
       - name: Install Python dependencies
         run: python -m pip install -r requirements-build.txt
-
-      - name: Probe afconvert channel behavior (diagnostics)
-        continue-on-error: true
-        run: python tools/mac_afconvert_probe.py
 
       - name: Run tests
         run: python -m unittest discover -s tests -p "test_*.py" -v

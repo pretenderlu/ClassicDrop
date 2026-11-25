@@ -13,7 +13,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / "tests")]
 
 import system
 from test_classicdrop import GUID, mock_device
-from library import Device, _device_guids, _ipod_usb_instance
+from library import _device_guids, _ipod_usb_instance
 
 SERIAL = GUID.hex()
 IOREG = [{

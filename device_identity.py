@@ -1,9 +1,9 @@
 """Work out which iPod model and finish is connected. Read-only, and never required for opening a library."""
 
 from dataclasses import dataclass
-import os
-from pathlib import Path
+import plistlib
 import re
+from xml.parsers.expat import ExpatError
 
 import system
 from device_registry import (DEFAULT_DEVICE_REGISTRY, DatabaseChecksum, DeviceEvidence, DeviceIdentifier, EvidenceAuthority,
@@ -43,12 +43,45 @@ class Player:
         return FAMILIES.get(self.family, self.family)
 
 
-def _device_files(root):
+def read_device_files(root, resolver=None):
+    """Read SysInfoExtended and SysInfo once (up to 2 MB each). resolver validates paths when provided."""
+    files = {}
+    for name in ("SysInfoExtended", "SysInfo"):
+        rel = "iPod_Control/Device/" + name
+        file = resolver(root, rel) if resolver else root / rel
+        if file.is_file() and 0 < file.stat().st_size <= 2 * 1024 * 1024:
+            files[name] = file.read_bytes()
+    return files
+
+
+def device_secrets(files):
+    """Serial numbers found in the already-read SysInfoExtended/SysInfo bytes, for log scrubbing."""
+    values = []
+    extended = files.get("SysInfoExtended")
+    if extended:
+        try:
+            data = extended if extended.startswith(b"bplist") else extended.strip(b"\x00\r\n ")
+            parsed = plistlib.loads(data)
+            if isinstance(parsed, dict):
+                values.extend(str(v) for k, v in parsed.items() if "serial" in str(k).lower())
+        except (ValueError, TypeError, ExpatError, plistlib.InvalidFileException):
+            pass
+    plain = files.get("SysInfo")
+    if plain:
+        for line in plain.decode("utf-8", "replace").splitlines():
+            key, sep, value = line.partition(":")
+            if sep and "serial" in key.strip().lower():
+                values.append(value.strip())
+    return tuple(v for v in values if v)
+
+
+def _device_files(root, files=None):
+    raw = read_device_files(root) if files is None else files
     evidence = DeviceEvidence()
     for name, parse in (("SysInfoExtended", parse_sysinfo_extended), ("SysInfo", parse_sysinfo)):
-        file = root / "iPod_Control/Device" / name
-        if file.is_file() and 0 < file.stat().st_size <= 2 * 1024 * 1024:
-            evidence = evidence.merged_with(parse(file.read_bytes()))
+        data = raw.get(name)
+        if data:
+            evidence = evidence.merged_with(parse(data))
     return evidence
 
 
@@ -79,7 +112,7 @@ def _resolve(evidence):
     return Player(candidates[0].family, generations.pop() if len(generations) == 1 else "", "", first)
 
 
-def identify(root, usb=None):
+def identify(root, usb=None, *, files=None):
     """What this iPod is, or None when that cannot be told or it is a model this program does not write.
 
     usb is the Windows instance name of the Apple USB device the volume belongs to, or any true value for
@@ -99,7 +132,7 @@ def identify(root, usb=None):
             hardware = hardware.merged_with(DeviceEvidence(usb_identifiers=(identifier,)))
         # Files on the volume can have been copied from another iPod. When they contradict what the
         # hardware itself reports, the hardware decides.
-        return _resolve(_device_files(root).merged_with(hardware)) or _resolve(hardware)
+        return _resolve(_device_files(root, files).merged_with(hardware)) or _resolve(hardware)
     except Exception:
         return None
 

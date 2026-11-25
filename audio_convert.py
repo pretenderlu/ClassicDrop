@@ -32,7 +32,23 @@ LABELS = {"copy": "原格式", "alac": "ALAC 无损", "alac-fit": "ALAC 兼容�
           "alac-48": f"ALAC {MAX_ALAC_BITS} 位 / {MAX_ALAC_RATE // 1000} kHz", "aac": "AAC-LC"}
 TAG_KEYS = {"title": "TIT2", "artist": "TPE1", "album": "TALB", "albumartist": "TPE2",
             "date": "TDRC", "genre": "TCON", "tracknumber": "TRCK", "discnumber": "TPOS"}
+MP4_ATOMS = {"title": "©nam", "artist": "©ART", "album": "©alb", "albumartist": "aART",
+             "date": "©day", "genre": "©gen", "tracknumber": "trkn", "discnumber": "disk"}
 AAC_RATES = (8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000)
+GENERIC_FOLDERS = {"music", "my music", "audio", "downloads", "desktop", "documents", "albums", "flac", "wav", "dsd", "dsf", "dff",
+                   "mp3", "lossless", "various artists", "音乐", "音樂", "下载", "下載", "歌曲", "专辑", "專輯",
+                   "无损音乐", "无损", "無損", "合集", "合辑", "群星"}
+FLAC_PCM = {8: ("pcm_s8", "s8"), 16: ("pcm_s16le", "s16le"),
+            24: ("pcm_s24le", "s24le"), 32: ("pcm_s32le", "s32le")}
+
+
+def _decode_text(raw):
+    for codec in ("utf-8-sig", "gb18030", "latin1"):
+        try:
+            return raw.decode(codec).strip()
+        except UnicodeDecodeError:
+            continue
+    return ""
 
 
 class _FlacComments(VCFLACDict):
@@ -112,12 +128,7 @@ def dff_comments(path):
         if not key or len(body) < 4:
             continue
         text = body[4:4 + int.from_bytes(body[:4], "big")].rstrip(b"\0")
-        for codec in ("utf-8-sig", "gb18030", "latin1"):
-            try:
-                value = text.decode(codec).strip()
-                break
-            except UnicodeDecodeError:
-                continue
+        value = _decode_text(text)
         if value:
             result[key] = [value]
     return result
@@ -165,6 +176,8 @@ def _asc(esds):
         if es[2] & 0x80:
             i += 2
         if es[2] & 0x40:
+            if i >= len(es):
+                continue
             i += 1 + es[i]
         if es[2] & 0x20:
             i += 2
@@ -228,6 +241,15 @@ def needs_48k_alac(audio):
     return isinstance(audio, (DSF, DSDIFF)) or info.sample_rate > MAX_ALAC_RATE or pcm_depth > MAX_ALAC_BITS
 
 
+def is_native_playable(suffix, info):
+    """True when an MP3 or M4A meets stock-firmware playback limits without re-encoding."""
+    if not (0 < info.length and 0 < info.sample_rate <= MAX_ALAC_RATE and info.channels in (1, 2)):
+        return False
+    if suffix == ".mp3":
+        return info.layer == 3
+    return (info.codec or "").lower() in ("alac", "mp4a.40.2")
+
+
 def tag_text(tags, key):
     return next((str(v).strip() for v in tags.get(key, ()) if str(v).strip()), "")
 
@@ -250,12 +272,7 @@ def riff_tags(path, changes=None):
                         chunk.write(data)
                     continue
                 raw = chunk.read().rstrip(b"\0")
-                for codec in ("utf-8-sig", "gb18030", "latin1"):
-                    try:
-                        value = raw.decode(codec).strip()
-                        break
-                    except UnicodeDecodeError:
-                        continue
+                value = _decode_text(raw)
                 if value:
                     result[key] = [value]
     return result
@@ -294,17 +311,18 @@ def _artist_folder(source):
     if not re.fullmatch(r"(?:19|20)\d{2}\s*[-–—]\s*\S.*", album.name):
         return ""
     artist = album.parent.name.strip()
-    if artist.casefold() in {"music", "audio", "downloads", "desktop", "documents", "albums", "various artists",
-                             "音乐", "音樂", "下载", "下載", "歌曲", "专辑", "專輯", "合集", "合辑", "群星"}:
+    if artist.casefold() in GENERIC_FOLDERS:
         return ""
     return artist
 
 
-def _metadata(source, audio, destination):
+def _metadata(source, audio, destination, *, song=None):
     suffix = source.suffix.lower()
     tags = source_tags(audio)
-    result = EasyMP4(destination)
-    for key in TAG_KEYS:
+    result = MP4(destination)
+    if result.tags is None:
+        result.add_tags()
+    for key, atom in MP4_ATOMS.items():
         values = tags.get(key)
         if not values:
             continue
@@ -314,66 +332,95 @@ def _metadata(source, audio, destination):
             total = tags.get(part + "total") or tags.get("total" + part + "s")
             if "/" not in number and total:
                 number += "/" + str(total[0])
-            if not all(v.isdecimal() and len(v) <= 4 for v in number.split("/")) or number.count("/") > 1:
+            parts = number.split("/")
+            if not all(v.isdecimal() and len(v) <= 4 for v in parts) or len(parts) > 2:
                 continue
-            values = [number]
-        result[key] = [str(v) for v in values]
-    if not result.get("title"):
-        result["title"] = [source.stem]
-    if not any(v.strip() for v in result.get("artist", [])):
-        artist = _artist_folder(source)
-        if artist:
-            result["artist"] = [artist]
-    result.save()
-
-    if suffix == ".m4a":
-        covers = MP4(source).get("covr", [])
-    else:
-        if suffix == ".flac":
-            pictures = audio.pictures
+            result[atom] = [(int(parts[0]), int(parts[1]) if len(parts) == 2 else 0)]
         else:
-            id3 = MP3(source).tags if suffix == ".mp3" else audio.tags
-            pictures = id3.getall("APIC") if id3 else ()
-        covers = [MP4Cover(pic.data, imageformat=MP4Cover.FORMAT_PNG if pic.mime == "image/png" else MP4Cover.FORMAT_JPEG)
-                  for pic in sorted(pictures, key=lambda p: p.type != 3) if pic.mime in ("image/png", "image/jpeg")]
-    if covers:
-        tagged = MP4(destination)
-        tagged["covr"] = covers
-        tagged.save()
+            result[atom] = [str(v) for v in values]
+    if song is not None:
+        for key, value in (("title", song.title), ("artist", song.artist), ("album", song.album)):
+            atom = MP4_ATOMS[key]
+            if value:
+                result[atom] = [value]
+            else:
+                result.tags.pop(atom, None)
+        if song.cover is None:
+            result.tags.pop("covr", None)
+        else:
+            cover_data, mime = song.cover.for_tag()
+            fmt = MP4Cover.FORMAT_PNG if mime == "image/png" else MP4Cover.FORMAT_JPEG
+            result["covr"] = [MP4Cover(cover_data, imageformat=fmt)]
+    else:
+        if not result.get("©nam"):
+            result["©nam"] = [source.stem]
+        if not any(v.strip() for v in result.get("©ART", [])):
+            artist = _artist_folder(source)
+            if artist:
+                result["©ART"] = [artist]
+        if suffix == ".m4a":
+            covers = MP4(source).get("covr", [])
+        else:
+            if suffix == ".flac":
+                pictures = audio.pictures
+            else:
+                id3 = MP3(source).tags if suffix == ".mp3" else audio.tags
+                pictures = id3.getall("APIC") if id3 else ()
+            covers = [MP4Cover(pic.data, imageformat=MP4Cover.FORMAT_PNG if pic.mime == "image/png" else MP4Cover.FORMAT_JPEG)
+                      for pic in sorted(pictures, key=lambda p: p.type != 3) if pic.mime in ("image/png", "image/jpeg")]
+        if covers:
+            result["covr"] = covers
+    result.save()
 
 
 def _unstamp(destination):
     """External encoders stamp wall-clock creation/modification times into mvhd/tkhd/mdhd,
-    which would make every conversion hash differently; zero them like FFmpeg's bitexact mode."""
+    which would make every conversion hash differently; zero them in place like FFmpeg's bitexact mode."""
     stamped = {b"mvhd", b"tkhd", b"mdhd"}
     containers = {b"moov", b"trak", b"mdia", b"minf", b"stbl", b"udta", b"edts"}
-    data = bytearray(destination.read_bytes())
-    def walk(start, end):
-        while start + 8 <= end:
-            size = int.from_bytes(data[start:start + 4], "big")
-            kind = bytes(data[start + 4:start + 8])
-            head = 8
-            if size == 1:
-                size = int.from_bytes(data[start + 8:start + 16], "big")
-                head = 16
-            elif size == 0:
-                size = end - start
-            if size < head or start + size > end:
-                break
-            if kind in stamped:
-                wide = data[start + head] == 1
-                for at in (start + head + 4, start + head + (12 if wide else 8)):
-                    data[at:at + (8 if wide else 4)] = b"\0" * (8 if wide else 4)
-            elif kind in containers:
-                walk(start + head, start + size)
-            start += size
-    walk(0, len(data))
-    destination.write_bytes(data)
+    with destination.open("r+b") as stream:
+        total = os.fstat(stream.fileno()).st_size
+        def walk(start, end):
+            while start + 8 <= end:
+                stream.seek(start)
+                header = stream.read(8)
+                if len(header) < 8:
+                    break
+                size = int.from_bytes(header[:4], "big")
+                kind = header[4:8]
+                head = 8
+                if size == 1:
+                    ext = stream.read(8)
+                    if len(ext) < 8:
+                        break
+                    size = int.from_bytes(ext, "big")
+                    head = 16
+                elif size == 0:
+                    size = end - start
+                if size < head or start + size > end:
+                    break
+                if kind in stamped:
+                    stream.seek(start + head)
+                    version = stream.read(1)
+                    if not version:
+                        break
+                    wide = version[0] == 1
+                    span = 16 if wide else 8
+                    if start + head + 4 + span <= start + size:
+                        stream.seek(start + head + 4)
+                        stream.write(b"\0" * span)
+                elif kind in containers:
+                    walk(start + head, start + size)
+                start += size
+        walk(0, total)
 
 
-def _ffmpeg(arguments):
-    process = subprocess.run([get_ffmpeg_exe(), "-nostdin", "-hide_banner", "-loglevel", "error", "-xerror", *arguments],
-                             stdin=subprocess.DEVNULL, capture_output=True, **system.NO_WINDOW)
+def _ffmpeg(arguments, timeout=900):
+    try:
+        process = subprocess.run([get_ffmpeg_exe(), "-nostdin", "-hide_banner", "-loglevel", "error", "-xerror", *arguments],
+                                 stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout, **system.NO_WINDOW)
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError("处理音频超时。") from exc
     if process.returncode:
         raise ValueError("处理音频失败。\n" + process.stderr.decode("utf8", "replace").strip()[-900:])
     return process.stdout.strip()
@@ -408,16 +455,12 @@ def _verify_duration(source, info, destination, encoded, pcm=None):
         raise ValueError("转换前后的音频采样不一致。" + lengths)
     if suffix == ".m4a":
         return
-    native_codec = {8: "pcm_s8", 16: "pcm_s16le", 24: "pcm_s24le", 32: "pcm_s32le"}.get(info.bits_per_sample)
+    native_codec = FLAC_PCM.get(info.bits_per_sample, (None,))[0]
     if info.md5_signature and native_codec:
         if (info.sample_rate, info.channels, info.bits_per_sample) != (rate, channels, bits):
             pcm_md5 = _pcm_md5(pcm_path, info.sample_rate, info.channels, native_codec, pcm_input)
         if pcm_md5 != info.md5_signature:
             raise ValueError("原始 FLAC 的音频采样与文件自带的 MD5 不一致。" + lengths)
-
-
-FLAC_PCM = {8: ("pcm_s8", "s8"), 16: ("pcm_s16le", "s16le"),
-            24: ("pcm_s24le", "s24le"), 32: ("pcm_s32le", "s32le")}
 
 
 def _flac_recovery(source, info, folder):
@@ -432,12 +475,15 @@ def _flac_recovery(source, info, folder):
         raise ValueError("内部有无法解码的数据，音频不完整，未传入 iPod。可能是下载或拷贝不完整。"
                          "可以用 foobar2000 的「验证完整性」检查，或重新获取文件后再传。")
     raw = Path(folder) / "clean.pcm"
-    proc = subprocess.run([get_ffmpeg_exe(), "-nostdin", "-hide_banner", "-loglevel", "error",
-                           "-protocol_whitelist", "file", "-i", str(source), "-map", "0:a:0",
-                           "-vn", "-sn", "-dn", "-c:a", codec, "-ar", str(info.sample_rate),
-                           "-ac", str(info.channels), "-threads:a", "1", "-fflags", "+bitexact",
-                           "-flags:a", "+bitexact", "-f", fmt, str(raw)],
-                          stdin=subprocess.DEVNULL, capture_output=True, **system.NO_WINDOW)
+    try:
+        proc = subprocess.run([get_ffmpeg_exe(), "-nostdin", "-hide_banner", "-loglevel", "error",
+                               "-protocol_whitelist", "file", "-i", str(source), "-map", "0:a:0",
+                               "-vn", "-sn", "-dn", "-c:a", codec, "-ar", str(info.sample_rate),
+                               "-ac", str(info.channels), "-threads:a", "1", "-fflags", "+bitexact",
+                               "-flags:a", "+bitexact", "-f", fmt, str(raw)],
+                              stdin=subprocess.DEVNULL, capture_output=True, timeout=900, **system.NO_WINDOW)
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError("音频容错解码超时，未传入 iPod。") from exc
     detail = proc.stderr.decode("utf8", "replace").strip()
     if detail:
         diagnostics.log.warning("%s 容错解码：%s", source.name, detail[-900:])
@@ -453,7 +499,7 @@ def _flac_recovery(source, info, folder):
     if not info.md5_signature:
         raise ValueError("内部有无法解码的数据，音频不完整，未传入 iPod。文件没有自带校验值，"
                          "无法确认音频完整。可以用 foobar2000 的「验证完整性」检查，或重新获取文件后再传。")
-    if samples != info.total_samples and samples < info.total_samples and not odd:
+    if samples < info.total_samples and not odd:
         raise ValueError("内部有无法解码的数据，音频不完整，未传入 iPod"
                          f"（约在第 {int(samples / info.sample_rate)} 秒附近）。可能是下载或拷贝不完整。"
                          "可以用 foobar2000 的「验证完整性」检查，或重新获取文件后再传。")
@@ -464,7 +510,7 @@ def _flac_recovery(source, info, folder):
     return raw, ["-f", fmt, "-ar", str(info.sample_rate), "-ac", str(info.channels)]
 
 
-def _convert(source, mode, destination):
+def _convert(source, mode, destination, *, song=None):
     if mode not in ("alac", "alac-fit", "alac-48", "aac"):
         raise ValueError("未知的传输格式。")
     audio = source_audio(source)
@@ -568,7 +614,7 @@ def _convert(source, mode, destination):
         encode(clean, clean_input)
         pcm_source = (clean, clean_input)
     try:
-        _metadata(source, audio, destination)
+        _metadata(source, audio, destination, song=song)
         encoded = mp4_audio(destination).info
         want = "mp4a.40.2" if mode == "aac" else "alac"
         if (encoded.codec != want or encoded.sample_rate != rate or encoded.channels != channels or encoded.length <= 0
@@ -627,12 +673,13 @@ def prepared_files(files, formats, device_root, report, *, reviewed=None):
                     dest = Path(folder) / f"{index}{source.suffix}"
                     report(f"正在写入歌曲信息 {index}/{len(files)} · {source.name}")
                     shutil.copyfile(source, dest)
+                    if song:
+                        song.write_tags(dest, False)
                 else:
                     dest = Path(folder) / f"{index}.m4a"
                     report(f"正在转换 {index}/{len(files)} · {source.name} → {LABELS.get(mode, mode)}")
-                    _convert(source, mode, dest)
+                    _convert(source, mode, dest, song=song)
                 if song:
-                    song.write_tags(dest, mode != "copy")
                     song.check_source()
                 end = source.stat()
                 if (stamp.st_size, stamp.st_mtime_ns) != (end.st_size, end.st_mtime_ns):

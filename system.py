@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from ctypes import wintypes
 import os
 from pathlib import Path
+import platform
 import plistlib
 import re
 import stat
@@ -12,6 +13,7 @@ import sys
 
 MAC = sys.platform == "darwin"
 WINDOWS = os.name == "nt"
+MOD = "Command" if MAC else "Control"
 
 DATA = Path(os.environ["LOCALAPPDATA"]) / "ClassicDrop" if WINDOWS else \
     Path.home() / "Library/Application Support/ClassicDrop"
@@ -20,6 +22,16 @@ NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if WINDOWS else {}
 
 # Files and folders macOS writes onto volumes; the iPod does not understand them.
 JUNK_DIRS = {".Spotlight-V100", ".fseventsd", ".Trashes", ".TemporaryItems"}
+
+
+def os_label():
+    return f"macOS {platform.mac_ver()[0]}" if MAC else f"Windows {platform.release()}（{platform.version()}）"
+
+
+def powershell(command, timeout=120):
+    ps = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+    return subprocess.run([str(ps), "-NoProfile", "-NonInteractive", "-Command", command],
+                          capture_output=True, timeout=timeout, **NO_WINDOW)
 
 
 def junk_file(name):
@@ -76,9 +88,7 @@ for ($hop = 0; $node -and $hop -lt 12; $hop++) {
 }
 """
     try:
-        ps = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
-        output = subprocess.run([str(ps), "-NoProfile", "-NonInteractive", "-Command", query],
-                                capture_output=True, timeout=12, **NO_WINDOW).stdout
+        output = powershell(query, timeout=12).stdout
     except subprocess.TimeoutExpired as exc:
         # The disk identifiers may already have arrived while Windows was resolving a parent.
         output = exc.stdout or b""
@@ -135,9 +145,9 @@ def _mac_disk_ids(root):
 
 def volume_ids(root):
     """Hardware identifiers of the disk holding root; empty when it cannot be told."""
-    if WINDOWS:
-        return _windows_disk_ids(root.drive) if root == Path(root.anchor) else ()
-    return _mac_disk_ids(root) if is_volume_root(root) else ()
+    if not is_volume_root(root):
+        return ()
+    return _windows_disk_ids(root.drive) if WINDOWS else _mac_disk_ids(root)
 
 
 def _request_usb_eject(instance):

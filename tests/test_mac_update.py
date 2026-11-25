@@ -1,9 +1,7 @@
-import os
 import plistlib
 import shutil
 import subprocess
 import sys
-import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -12,7 +10,6 @@ from unittest.mock import patch
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 import mac_update
-import system
 
 
 def fake_bundle(base, version="9.9.9", exe=b"#!/bin/sh\nexit 0\n"):

@@ -15,7 +15,6 @@ from library import editable_playlist, validate_playlist_name
 from music_import import Cover, FIELDS, scan_inputs, thumbnail
 import system
 import theme
-app_mod = "Command" if system.MAC else "Control"
 
 MODE_NAMES = {"copy": "保留原格式", "alac": "Apple Lossless（ALAC）", "alac-fit": "ALAC 兼容转换", "alac-48": LABELS["alac-48"],
               "aac": "AAC-LC（有损）"}
@@ -71,7 +70,7 @@ class ImportDialog(tk.Toplevel):
         self._first()
         self._ready()
         self.bind("<Escape>", lambda _: self.cancel())
-        self.bind(f"<{app_mod}-Return>", lambda _: self.finish(bool(self.device_name)))
+        self.bind(f"<{system.MOD}-Return>", lambda _: self.finish(bool(self.device_name)))
         for widget in (self, self.tree):
             widget.drop_target_register(DND_FILES)
             widget.dnd_bind("<<Drop>>", self._drop)
@@ -128,7 +127,7 @@ class ImportDialog(tk.Toplevel):
         self.tree.grid(row=0, column=0, sticky="nsew")
         scroll.grid(row=0, column=1, sticky="ns")
         self.tree.bind("<<TreeviewSelect>>", self._selection)
-        self.tree.bind(f"<{app_mod}-a>", self.select_all)
+        self.tree.bind(f"<{system.MOD}-a>", self.select_all)
         self.tree.bind("<Delete>", self.remove_selected)
 
         edit = ttk.Frame(content, padding=px(16, 0, 4, 0), style="Import.TFrame")

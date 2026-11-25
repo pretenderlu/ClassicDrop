@@ -3,9 +3,7 @@
 import hashlib
 import json
 import os
-import platform
 import re
-import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,9 +20,8 @@ PROJECT_URL = "https://github.com/" + REPOSITORY
 
 
 def environment_lines(device=""):
-    """Version, Windows build and iPod model; nothing that identifies the user. Shared with the feedback report."""
-    os_name = f"macOS {platform.mac_ver()[0]}" if system.MAC else f"Windows {platform.release()}（{platform.version()}）"
-    return [f"- ClassicDrop：v{__version__}", f"- 系统：{os_name}",
+    """Version, OS build and iPod model; nothing that identifies the user. Shared with the feedback report."""
+    return [f"- ClassicDrop：v{__version__}", f"- 系统：{system.os_label()}",
             f"- 架构：{cpuarch.describe()}", f"- iPod：{device or '未连接'}"]
 
 
@@ -41,12 +38,7 @@ MAC_DMG = re.compile(r"ClassicDrop-macOS-(arm64|x64)-[\w.\-]+\.dmg")
 
 def mac_arch():
     """Hardware arch for the DMG choice: Apple Silicon even when the app runs under Rosetta."""
-    try:
-        out = subprocess.run(["sysctl", "-n", "hw.optional.arm64"], capture_output=True,
-                             timeout=10, text=True, **system.NO_WINDOW).stdout.strip()
-        return "arm64" if out == "1" else "x64"
-    except (OSError, subprocess.SubprocessError):
-        return "arm64" if platform.machine() == "arm64" else "x64"
+    return "arm64" if cpuarch.host_arch() == "ARM64" else "x64"
 
 
 class UpdateError(RuntimeError):
@@ -173,7 +165,7 @@ def _fetch(info, url, temporary, progress):
 def download_update(info, destination, progress=None):
     """Download the installer to destination, checking its size and SHA-256. Dropped connections are retried."""
     if not info.download_url:
-        raise UpdateError("该版本没有可自动安装的 Windows 安装包。")
+        raise UpdateError("该版本没有可自动安装的" + (" macOS 更新包。" if system.MAC else " Windows 安装包。"))
     if not info.sha256:
         raise UpdateError("该版本缺少安装包校验信息，请前往发布页手动下载。")
     destination = Path(destination)

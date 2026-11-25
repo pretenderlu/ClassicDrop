@@ -108,7 +108,7 @@ def removal_receipt(device, desired, after_hash, report, genius=None):
     before, after = device.library.snapshot.tracks, desired.tracks
     old_ids, new_ids = tuple(t.track_id for t in before), tuple(t.track_id for t in after)
     keep = set(new_ids)
-    protected = {_music_file(device, os.path.normpath(t.metadata.location)) for t in after if t.metadata.location}
+    protected = {_music_file(device, t.metadata.location) for t in after if t.metadata.location}
     media = {}
     for track in before:
         if track.track_id in keep:
@@ -151,6 +151,8 @@ def merge_receipt(device, after_hash, counts):
     """A receipt that retires Play Counts once its stars and plays are part of the committed library."""
     updates = {}
     for name, path in _sidecars(device).items():
+        if not path.is_file() or path.stat().st_size > MAX_SIDECAR_BYTES:
+            raise ValueError(f"无法核对设备上的播放记录：{name}")
         data = path.read_bytes()
         readonly = system.is_readonly(path.stat())
         retire = name.casefold() == "play counts"
@@ -218,8 +220,11 @@ def settle_removal(device, plan, backups, committed):
                     slot.chmod(slot.stat().st_mode | stat.S_IWUSR)
                     slot.unlink()
             else:
+                target = inside(device.root, relative)
+                if not system.WINDOWS and (target.exists() or target.is_symlink()):
+                    raise FileExistsError(f"原路径已存在文件，已保留暂存音频：{relative}")
                 # Windows rename never overwrites a file recreated at the original path.
-                slot.rename(inside(device.root, relative))
+                slot.rename(target)
         elif not committed:
             original = inside(device.root, relative)
             if not original.is_file():

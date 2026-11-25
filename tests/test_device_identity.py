@@ -5,7 +5,6 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from test_classicdrop import mock_device
-import device_identity
 import system
 from device_identity import describe, identify
 from theme import player_image

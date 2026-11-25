@@ -44,9 +44,8 @@ def main(out_dir):
     with tempfile.TemporaryDirectory() as home:
         os.environ["HOME"] = home  # before app/system import so DATA/LOGS point inside it
         import app
-        import theme
         from test_classicdrop import FIXTURES, Device, mock_device
-        from test_native_covers import covered_m4a, picture
+        from test_native_covers import covered_m4a
         from transfer import transfer
 
         root = Path(home) / "iPod"

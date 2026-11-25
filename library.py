@@ -11,8 +11,8 @@ from pathlib import Path
 from uuid import uuid4
 from xml.parsers.expat import ExpatError
 
-from device_identity import identify
-from audio_convert import lossless_profile, needs_48k_alac, source_audio, source_tags, tag_text
+from device_identity import device_secrets, identify, read_device_files
+from audio_convert import MAX_ALAC_RATE, lossless_profile, needs_48k_alac, source_audio, source_tags, tag_text
 
 import cpuarch
 import system
@@ -69,12 +69,12 @@ def _guid(value):
     return None
 
 
-def _device_guids(root, disk_ids):
+def _device_guids(root, disk_ids, files=None):
+    raw_files = read_device_files(root, inside) if files is None else files
     for name in ("SysInfoExtended", "SysInfo"):
-        file = inside(root, "iPod_Control/Device/" + name)
-        if not file.is_file() or file.stat().st_size > 2 * 1024 * 1024:
+        data = raw_files.get(name)
+        if not data:
             continue
-        data = file.read_bytes()
         if not data.startswith(b"bplist"):
             data = data.strip(b"\x00\r\n ")
         if name == "SysInfoExtended":
@@ -101,6 +101,21 @@ def _ipod_usb_instance(disk_ids):
     return None
 
 
+def _read_database(root):
+    path = inside(root, DB)
+    compressed = inside(root, "iPod_Control/iTunes/iTunesCDB")
+    if compressed.is_file() and compressed.stat().st_size:
+        raise ValueError("这是压缩曲库。此版本适用于使用 iTunesDB 的 iPod classic 和 nano 第 3、4 代。")
+    if not path.is_file():
+        raise ValueError("未找到原厂曲库。请选择包含 iPod_Control 的 iPod 根目录。")
+    if not 108 <= path.stat().st_size <= MAX_DB:
+        raise ValueError("曲库为空、文件过大或不完整，无法读取。")
+    original = path.read_bytes()
+    if original[:4] != b"mhbd" or int.from_bytes(original[8:12], "little") != len(original):
+        raise ValueError("iTunesDB 文件头或长度不正确。")
+    return original
+
+
 @dataclass
 class Device:
     root: Path
@@ -111,38 +126,60 @@ class Device:
     usb_instance: str | None = None
     profile: object = None
     disk_ids: tuple = ()
+    secrets: tuple = ()
 
     @classmethod
     def open(cls, directory, manual_guid=None):
         root = Path(directory).resolve(strict=True)
-        path = inside(root, DB)
-        compressed = inside(root, "iPod_Control/iTunes/iTunesCDB")
-        if compressed.is_file() and compressed.stat().st_size:
-            raise ValueError("这是压缩曲库。此版本适用于使用 iTunesDB 的 iPod classic 和 nano 第 3、4 代。")
-        if not path.is_file():
-            raise ValueError("未找到原厂曲库。请选择包含 iPod_Control 的 iPod 根目录。")
-        if not 108 <= path.stat().st_size <= MAX_DB:
-            raise ValueError("曲库为空、文件过大或不完整，无法读取。")
-        original = path.read_bytes()
-        if original[:4] != b"mhbd" or int.from_bytes(original[8:12], "little") != len(original):
-            raise ValueError("iTunesDB 文件头或长度不正确。")
+        original = _read_database(root)
         signed = int.from_bytes(original[48:50], "little") == 1
         disk_ids = system.volume_ids(root)
-        candidates = (_guid(manual_guid),) if manual_guid else _device_guids(root, disk_ids)
+        files = read_device_files(root, inside)
+        candidates = (_guid(manual_guid),) if manual_guid else _device_guids(root, disk_ids, files)
         guid = next((g for g in candidates if g and signed and verify_hash58(original, g)), None)
         if manual_guid and not guid:
             raise ValueError("这个 GUID 与当前曲库校验不匹配。")
         usb_instance = _ipod_usb_instance(disk_ids)
         return cls(root, original, hashlib.sha256(original).hexdigest(), IPodLibrary(original), guid,
-                   usb_instance, identify(root, usb_instance), disk_ids)
+                   usb_instance, identify(root, usb_instance, files=files), disk_ids, device_secrets(files))
+
+    def reload(self):
+        """Reload iTunesDB from disk while reusing already-probed hardware identity and secrets."""
+        original = _read_database(self.root)
+        signed = int.from_bytes(original[48:50], "little") == 1
+        if self.guid and not (signed and verify_hash58(original, self.guid)):
+            return Device.open(self.root)
+        return replace(self, original=original, version=hashlib.sha256(original).hexdigest(),
+                       library=IPodLibrary(original))
 
     def eject(self):
         if not self.usb_instance or not system.is_volume_root(self.root):
             raise ValueError("弹出需要通过 USB 连接的 iPod 卷。")
-        current = _ipod_usb_instance(system.volume_ids(self.root))
+        current_ids = system.volume_ids(self.root)
+        current = _ipod_usb_instance(current_ids)
         if not current or current.casefold() != self.usb_instance.casefold():
             raise OSError("设备对应的 iPod 已断开或改变，请刷新设备。")
-        system.eject_device(current, self.disk_ids)
+        system.eject_device(current, current_ids)
+
+
+def _merge_play_counts(device, *, strict):
+    file = inside(device.root, PLAY_COUNTS)
+    if not file.is_file():
+        return device.library, None
+    size = file.stat().st_size
+    if size > MAX_SIDECAR_BYTES or (not strict and size == 0):
+        if strict:
+            raise ValueError("文件过大。")
+        return device.library, None
+    data = file.read_bytes()
+    merged = device.library.with_sidecars((PlaybackSidecar("Play Counts", data),))
+    if merged.sidecar_issues:
+        if strict:
+            raise ValueError(merged.sidecar_issues[0].message)
+        return device.library, None
+    if not strict and len(merged.snapshot.tracks) != len(device.library.snapshot.tracks):
+        return device.library, None
+    return merged, data
 
 
 def listening(device):
@@ -154,11 +191,7 @@ def listening(device):
     """
     library = device.library
     try:
-        file = inside(device.root, PLAY_COUNTS)
-        if file.is_file() and 0 < file.stat().st_size <= MAX_SIDECAR_BYTES:
-            merged = library.with_sidecars((PlaybackSidecar("Play Counts", file.read_bytes()),))
-            if not merged.sidecar_issues and len(merged.snapshot.tracks) == len(library.snapshot.tracks):
-                library = merged
+        library, _ = _merge_play_counts(device, strict=False)
     except Exception:
         pass
     return {t.track_id: (t.rating, t.play_count) for t in library.snapshot.tracks}
@@ -170,18 +203,12 @@ def with_listening(device):
     A library written from this state contains the stars and plays recorded on the iPod, so the file must be
     retired in the same operation or they would be counted again.
     """
-    file = inside(device.root, PLAY_COUNTS)
-    if not file.is_file():
-        return device, None
     try:
-        if file.stat().st_size > MAX_SIDECAR_BYTES:
-            raise ValueError("文件过大。")
-        data = file.read_bytes()
-        merged = device.library.with_sidecars((PlaybackSidecar("Play Counts", data),))
-        if merged.sidecar_issues:
-            raise ValueError(merged.sidecar_issues[0].message)
+        merged, data = _merge_play_counts(device, strict=True)
     except ValueError as error:
         raise ValueError(f"无法合并 iPod 上的播放记录（Play Counts），已停止保存。\n{error}") from error
+    if data is None:
+        return device, None
     return replace(device, library=merged), data
 
 
@@ -220,7 +247,7 @@ def audio_track(source, track_id, destination, size):
     else:
         raise ValueError("此音源需要转换。请在待传列表中选择传输格式。")
     info = audio.info
-    if not (0 < info.length and 0 < info.sample_rate <= 48000 and info.channels in (1, 2)):
+    if not (0 < info.length and 0 < info.sample_rate <= MAX_ALAC_RATE and info.channels in (1, 2)):
         raise ValueError("请使用单声道或立体声、采样率不超过 48 kHz 的音频。")
     if size >= 2**32 or info.length * 1000 >= 2**32:
         raise ValueError("文件大小或时长超过 iPod 单曲上限。")

@@ -1,7 +1,5 @@
 import ctypes
 import json
-import platform
-import plistlib
 from dataclasses import replace
 from pathlib import Path
 from queue import Empty, Queue
@@ -25,9 +23,11 @@ from audio_convert import LABELS
 from coverflow import CoverFlow
 from device_identity import describe
 import diagnostics
+import dialogs
 import encoders
 import mac_update
 from import_dialog import AUDIO_TYPES, ImportDialog, NewPlaylist, playlist_targets
+from ratings import RatingMixin
 import theme
 from library import (DB, Device, editable_playlist, is_music, listening, move_playlist_entries, playlist_edit, rename_device,
                      rename_playlist)
@@ -40,7 +40,7 @@ import system
 
 BACKUPS = system.DATA / "Backups"
 SETTINGS = BACKUPS.with_name("settings.json")
-MOD = "Command" if system.MAC else "Control"
+MOD = system.MOD
 
 
 def discover():
@@ -52,7 +52,7 @@ def _disabled(window):
     return system.WINDOWS and window.attributes("-disabled")
 
 
-class App:
+class App(RatingMixin):
     def __init__(self, window, browse="all", settings=None, check_updates=False):
         """settings is the file that remembers the theme and browsing mode. Without it nothing is read or saved.
 
@@ -319,183 +319,8 @@ class App:
             self.render()
         self.search_after = self.window.after(100, delayed)
 
-    def _rating_column(self):
-        return next((f"#{i + 1}" for i, (name, _) in enumerate(self.columns_shown or ()) if name == "评级"), None)
-
-    def _rating(self, track):
-        return self.pending_ratings.get(
-            track.track_id, self.listening.get(track.track_id, (track.rating, track.play_count))[0])
-
-    _SPACE_CHARS = "            "
-
-    @staticmethod
-    def _spaces_for(target, font):
-        """Space characters adding up to (or closest to) the target pixel width."""
-        options = sorted(((w, c) for c in App._SPACE_CHARS if (w := font.measure(c)) > 0), reverse=True)
-        out = []
-        for width, char in options:
-            count, target = divmod(target, width)
-            out.append(char * count)
-        if options and target > 0 and options[-1][0] - target <= target:
-            out.append(options[-1][1])  # one narrow space overshoots less than the gap left
-        return "".join(out)
-
-    def _pad_center(self, text, width, font):
-        diff = width - font.measure(text)
-        if diff <= 0:
-            return text
-        left = self._spaces_for(diff // 2, font)
-        return left + text + self._spaces_for(diff - font.measure(left), font)
-
-    def _rating_slots(self):
-        """(star width, padded dot, padded half-star): every slot is one star wide."""
-        if self._slot_glyphs is None:
-            font = self._rating_font()
-            star = font.measure("★")
-            self._slot_glyphs = star, self._pad_center("·", star, font), self._pad_center("½", star, font)
-        return self._slot_glyphs
-
-    def _rating_text(self, rating, dots=False):
-        whole, half = rating // 20, rating % 20 >= 10
-        if not dots:
-            return "★" * whole + ("½" if half else "")
-        _, dot, half_star = self._rating_slots()
-        return "★" * whole + (half_star if half else "") + dot * (5 - whole - bool(half))
-
-    def _set_rating(self, iid, dots=False):
-        record = self.rows.get(iid, (None,))[0]
-        column = self._rating_column()
-        if column and getattr(record, "track_id", None) is not None:
-            self.tree.set(iid, column, self._rating_text(self._rating(record), dots))
-
-    def _rating_font(self):
-        # Treeview rows take their font from *Font; the counter label uses the same one.
-        return tkfont.Font(font=self.counter.cget("font"))
-
-    def _rating_hover(self, event):
-        iid = self.tree.identify_row(event.y) if event else ""
-        if iid == self.hover_row:
-            return
-        old, self.hover_row = self.hover_row, iid
-        if old:
-            self._set_rating(old)
-        if iid:
-            self._set_rating(iid, dots=True)
-
-    def _rating_slot(self, event):
-        """(row iid, slot 1..5) for a click inside the rating glyphs, else (iid or None, None)."""
-        iid = self.tree.identify_row(event.y)
-        record = self.rows.get(iid, (None,))[0]
-        if getattr(record, "track_id", None) is None or not (self.device and self.device.guid):
-            return None, None
-        column = self._rating_column()
-        if not column or self.tree.identify_column(event.x) != column:
-            return None, None
-        bbox = self.tree.bbox(iid, column)
-        if not bbox:
-            return iid, None
-        x = event.x - bbox[0] - self.px(4)
-        star = self._rating_slots()[0]
-        if 0 <= x < 5 * star:
-            return iid, x // star + 1
-        return iid, None
-
-    def _rating_click(self, event):
-        iid, slot = self._rating_slot(event)
-        if slot is None:
-            return
-        track = self.rows[iid][0]
-        rating = slot * 20
-        self.pending_ratings[track.track_id] = 0 if rating == self._rating(track) else rating
-        self._set_rating(iid, dots=iid == self.hover_row)
-        self._show_pending()
-        self._arm_rating_timer()
-        return "break"
-
-    def _show_pending(self):
-        if self.pending_ratings:
-            self.rating_count.configure(text=f"有 {len(self.pending_ratings)} 首歌曲的评级待保存")
-            self.rating_note.pack(side="left")
-        else:
-            self.rating_note.pack_forget()
-
-    def _undo_ratings(self):
-        pending, self.pending_ratings = self.pending_ratings, {}
-        if self.rating_timer:
-            self.window.after_cancel(self.rating_timer)
-            self.rating_timer = None
-        for iid, (record, _) in self.rows.items():
-            if getattr(record, "track_id", None) in pending:
-                self._set_rating(iid, dots=iid == self.hover_row)
-        self._show_pending()
-
-    def _arm_rating_timer(self):
-        if self.rating_timer:
-            self.window.after_cancel(self.rating_timer)
-        self.rating_timer = self.window.after(2000, self._save_ratings)
-
-    def _save_ratings(self):
-        self.rating_timer = None
-        if self.busy:
-            self.rating_timer = self.window.after(1000, self._save_ratings)
-            return
-        dev = self.device
-        if not (dev and dev.guid):
-            self._undo_ratings()
-            return
-        ids = {t.track_id for t in dev.library.snapshot.tracks}
-        batch, stale = {}, set()
-        for tid, rating in self.pending_ratings.items():
-            if tid in ids:
-                batch[tid] = rating
-            else:
-                stale.add(tid)
-        self.pending_ratings = {}
-        for iid, (record, _) in self.rows.items():
-            if getattr(record, "track_id", None) in stale:
-                self._set_rating(iid, dots=iid == self.hover_row)
-        self._show_pending()
-        if batch:
-            self._write_ratings(batch, f"已保存 {len(batch)} 首歌曲的评级。")
-
-    def _write_ratings(self, ratings, message, after=None):
-        """One write for all pending stars, then a light reload: a ratings write never touches artwork."""
-        dev = self.device
-        selection, scroll = self.tree.selection(), self.tree.yview()[0]
-        def work(report):
-            transfer(dev, [], BACKUPS, report, ratings=ratings)
-            new = Device.open(dev.root, dev.guid.hex())
-            return new, listening(new)
-        def done(result):
-            new, heard = result
-            self._hide_device(new)
-            self.device, self.listening = new, heard
-            self.render(keep_view=True)
-            kept = [iid for iid in selection if self.tree.exists(iid)]
-            if kept:
-                self.tree.selection_set(kept)
-            self.tree.yview_moveto(scroll)
-            self._show_pending()
-            if message:
-                self.status.set(message)
-            if after:
-                after()
-        self._work("正在保存评级…", work, done)
-
-    def _flush_ratings(self, then):
-        """Save pending ratings first, then run then(); failure keeps the batch and stops here."""
-        dev = self.device
-        if self.busy or not self.pending_ratings or not (dev and dev.guid):
-            then()
-            return
-        ids = {t.track_id for t in dev.library.snapshot.tracks}
-        batch = {tid: rating for tid, rating in self.pending_ratings.items() if tid in ids}
-        self.pending_ratings = {}
-        self._show_pending()
-        if not batch:
-            then()
-            return
-        self._write_ratings(batch, "", after=then)
+    def _commit_ratings(self, dev, report, ratings):
+        transfer(dev, [], BACKUPS, report, ratings=ratings)
 
     def _work(self, status, function, done):
         if self.busy:
@@ -654,53 +479,63 @@ class App:
             self.status.set(f"「{name}」已安全弹出，可以拔下数据线。")
         self._work(f"正在安全弹出「{name}」…", lambda _: dev.eject(), removed)
 
-    def load(self, folder, guid=None, status=None, after_load=None):
-        self._flush_ratings(lambda: self._load(folder, guid, status, after_load))
+    def load(self, folder, guid=None, status=None, after_load=None, *, reload_covers=True):
+        self._flush_ratings(lambda: self._load(folder, guid, status, after_load, reload_covers=reload_covers))
 
-    def _load(self, folder, guid=None, status=None, after_load=None):
+    def _load(self, folder, guid=None, status=None, after_load=None, *, reload_covers=True):
         if self.busy:
             return
         old = self.device
-        if (not old or old.root != Path(folder).resolve()) and not isinstance(self.queue_target, NewPlaylist):
+        resolved = Path(folder).resolve()
+        if (not old or old.root != resolved) and not isinstance(self.queue_target, NewPlaylist):
             self.queue_target = None
-        if old and old.root != Path(folder).resolve():
+        if old and old.root != resolved:
             self.view = "library"
-        if guid is None and old and old.guid and old.root == Path(folder).resolve():
+        if guid is None and old and old.guid and old.root == resolved:
             saved = old.guid.hex()
         else:
             saved = None
+        same_guid = guid is None or (old is not None and old.guid is not None and guid.lower() == old.guid.hex())
+        light = not reload_covers and same_guid and old is not None and old.root == resolved
         # Keep the same read-only view available if a manually entered GUID fails.
-        if not (guid and old and not old.guid and old.root == Path(folder).resolve()):
+        if not (guid and old and not old.guid and old.root == resolved):
             self.device = None
         self._buttons()
-        covers = []
+        side = self.px(40)
         def read(_):
             device = None
-            if saved:
-                try:
-                    device = Device.open(folder, saved)
-                except ValueError:
-                    pass
-            device = device or Device.open(folder, guid)
+            if light:
+                device = old.reload()
+            else:
+                if saved:
+                    try:
+                        device = Device.open(folder, saved)
+                    except ValueError:
+                        pass
+                device = device or Device.open(folder, guid)
             # Asking a sleeping disk for its free space can take seconds, so it is done here, off the interface.
             try:
-                covers.append(shutil.disk_usage(device.root) if system.is_volume_root(device.root) else None)
+                usage = shutil.disk_usage(device.root) if system.is_volume_root(device.root) else None
             except OSError:
-                covers.append(None)
-            small, large = device_covers(device)
-            side = self.px(40)
-            covers.extend((small, large, {art: image.resize((side, side), Image.Resampling.LANCZOS)
-                                          for art, image in small.items()}))
-            covers.append(listening(device))
-            return device
-        def loaded(device):
+                usage = None
+            covers_bundle = None
+            if not light:
+                small, large = device_covers(device)
+                thumbs = {art: image.resize((side, side), Image.Resampling.LANCZOS) for art, image in small.items()}
+                covers_bundle = (small, large, thumbs)
+            return device, usage, covers_bundle, listening(device)
+        def loaded(result):
+            device, usage, covers_bundle, heard = result
             self._hide_device(device)
             self.device = device
-            self.usage, self.covers, self.cover_reads, self.cover_thumbs, self.listening = covers
-            self.sharp_covers, self.cover_images, self.group_shown = {}, {}, None
-            self.cover_pending.clear()
-            self.cover_stamp += 1
-            self.flow.forget()
+            self.usage, self.listening = usage, heard
+            self.group_shown = None
+            if covers_bundle is not None:
+                self.covers, self.cover_reads, self.cover_thumbs = covers_bundle
+                self.sharp_covers, self.cover_images = {}, {}
+                self.cover_pending.clear()
+                self.cover_stamp += 1
+                self.flow.forget()
             self.render()
             message = status or "曲库已读取。"
             if not status and device.profile and not device.profile.proven:
@@ -720,22 +555,10 @@ class App:
         """The serial, FireWire GUID and device name must never reach the log or the feedback report."""
         name = dev.library.snapshot.device_name or ""
         generic = {"ipod", "ipod classic", (dev.profile.name if dev.profile else "").lower()}
-        values = [name if name.strip().lower() not in generic else "", dev.usb_instance or "", *dev.disk_ids]
+        values = [name if name.strip().lower() not in generic else "", dev.usb_instance or "", *dev.disk_ids,
+                  *getattr(dev, "secrets", ())]
         if dev.guid:
             values.append(dev.guid.hex())
-        info = dev.root / "iPod_Control/Device"
-        try:
-            data = plistlib.loads((info / "SysInfoExtended").read_bytes())
-            values += [str(v) for k, v in data.items() if "serial" in str(k).lower()]
-        except Exception:
-            pass
-        try:
-            for line in (info / "SysInfo").read_text(encoding="utf-8", errors="replace").splitlines():
-                key, _, value = line.partition(":")
-                if "serial" in key.strip().lower():
-                    values.append(value.strip())
-        except OSError:
-            pass
         diagnostics.hide(*values)
         diagnostics.log.info("已识别设备：%s", describe(dev.profile) or "未知机型")
 
@@ -779,6 +602,7 @@ class App:
         self.group_shown = self.nav_shown = self.columns_shown = None
         self._layout()
         self.render()
+        self._show_pending()
         theme.title_bar(self.window)
 
     def _picked(self, _):
@@ -1148,6 +972,9 @@ class App:
         self.render()
 
     def send(self, batch=None, *, previous_target=None):
+        self._flush_ratings(lambda: self._send(batch, previous_target=previous_target))
+
+    def _send(self, batch=None, *, previous_target=None):
         dev, reviewed, target = self.device, self.pending.copy() if batch is None else batch, self.queue_target
         if not dev or not dev.guid or not reviewed or self.busy:
             return
@@ -1181,9 +1008,12 @@ class App:
             self.status.set("没有需要保存的改动。")
             return
         self._work("正在保存曲库…", lambda report: transfer(dev, [], BACKUPS, report, desired=desired),
-                   lambda _: self.load(dev.root, dev.guid.hex(), message, after_load))
+                   lambda _: self.load(dev.root, dev.guid.hex(), message, after_load, reload_covers=False))
 
     def change_device_name(self):
+        self._flush_ratings(self._change_device_name)
+
+    def _change_device_name(self):
         dev = self.device
         if self.busy or not dev or not dev.guid:
             return
@@ -1202,6 +1032,9 @@ class App:
         self._save(desired, f"设备已改名为「{desired.device_name}」。")
 
     def repair_covers(self):
+        self._flush_ratings(self._repair_covers)
+
+    def _repair_covers(self):
         dev = self.device
         if self.busy or not dev or not dev.guid:
             return
@@ -1214,6 +1047,9 @@ class App:
         self._work("正在检查原厂封面…", lambda report: transfer(dev, (), BACKUPS, report, repair_covers=True), done)
 
     def delete_music(self, *, all_music=False):
+        self._flush_ratings(lambda: self._delete_music(all_music=all_music))
+
+    def _delete_music(self, *, all_music=False):
         dev = self.device
         if self.busy or not dev or not dev.guid or (not all_music and self.view == "queue"):
             return
@@ -1239,9 +1075,12 @@ class App:
                 return
         message = f"已从 iPod 删除 {len(ids)} 首音乐。" if not all_music else f"音乐库已清空，共删除 {len(ids)} 首音乐。"
         self._work("正在整理曲库与音频…", lambda report: transfer(dev, [], BACKUPS, report, remove_ids=ids),
-                   lambda _: self.load(dev.root, dev.guid.hex(), message))
+                   lambda _: self.load(dev.root, dev.guid.hex(), message, reload_covers=False))
 
     def change_playlist(self, playlist_id=None, remove=False):
+        self._flush_ratings(lambda: self._change_playlist(playlist_id, remove))
+
+    def _change_playlist(self, playlist_id=None, remove=False):
         if self.busy or not self.device or not self.device.guid:
             return
         name = None
@@ -1289,6 +1128,9 @@ class App:
         return "break"
 
     def manage_list(self, action):
+        self._flush_ratings(lambda: self._manage_list(action))
+
+    def _manage_list(self, action):
         dev = self.device
         if self.busy or not dev or not dev.guid or self.view not in self.target_keys:
             return
@@ -1299,7 +1141,7 @@ class App:
                                    default="no", parent=self.window):
                 self._work("正在删除播放列表…",
                            lambda report: transfer(dev, (), BACKUPS, report, delete_playlist_id=playlist.playlist_id),
-                           lambda _: self.load(dev.root, dev.guid.hex(), "播放列表已删除，歌曲已保留。"))
+                           lambda _: self.load(dev.root, dev.guid.hex(), "播放列表已删除，歌曲已保留。", reload_covers=False))
             return
         try:
             if action == "rename":
@@ -1320,6 +1162,9 @@ class App:
             self._fail("播放列表", str(exc), exc)
 
     def edit_tags(self):
+        self._flush_ratings(self._edit_tags)
+
+    def _edit_tags(self):
         tracks = self.selected()
         if self.busy or not self.device or not self.device.guid or self.view == "queue" or not tracks:
             return
@@ -1333,34 +1178,12 @@ class App:
                 self._save(replace(snap, tracks=edited), f"已更新 {len(ids)} 首歌曲的曲库歌手。")
             return
         track = tracks[0]
-        dialog = tk.Toplevel(self.window)
-        dialog.title("编辑 iPod 曲库信息")
-        dialog.configure(bg=theme.SURFACE)
-        self.window.after(60, theme.title_bar, dialog)
-        dialog.transient(self.window)
-        dialog.grab_set()
-        dialog.resizable(False, False)
-        values = []
-        for i, (label, value) in enumerate((("歌名", track.title), ("歌手", track.artist), ("专辑", track.album))):
-            ttk.Label(dialog, text=label).grid(row=i, column=0, padx=self.px(15), pady=self.px(8))
-            field = ttk.Entry(dialog, width=38)
-            field.insert(0, value)
-            field.grid(row=i, column=1, padx=self.px(0, 15), pady=self.px(8))
-            values.append(field)
-        def save(*_):
-            title, artist, album = (v.get().strip() for v in values)
-            if not title:
-                values[0].focus_set()
-                return
+        def save(title, artist, album):
             snapshot = self.device.library.snapshot
             changed = replace(track, title=title, artist=artist, album=album)
             desired = replace(snapshot, tracks=tuple(changed if t.track_id == track.track_id else t for t in snapshot.tracks))
-            dialog.destroy()
             self._save(desired, "歌曲信息已保存到 iPod 曲库。")
-        ttk.Button(dialog, text="保存到 iPod", command=save).grid(row=3, column=1, sticky="e", padx=self.px(15), pady=self.px(11))
-        dialog.bind("<Return>", save)
-        dialog.bind("<Escape>", lambda _: dialog.destroy())
-        values[0].focus_set()
+        dialogs.open_edit_track_dialog(self.window, self.px, track, save)
 
     def export(self):
         dev, tracks = self.device, tuple(self.selected())
@@ -1378,9 +1201,7 @@ class App:
             return
         ratings = {**self.pending_ratings, **{t.track_id: rating for t in tracks}}
         self.pending_ratings = {}
-        if self.rating_timer:
-            self.window.after_cancel(self.rating_timer)
-            self.rating_timer = None
+        self._cancel_rating_timer()
         done = f"已将 {len(ratings)} 首歌曲评为 {'★' * (rating // 20)}。" if rating else f"已清除 {len(ratings)} 首歌曲的评级。"
         self._write_ratings(ratings, done)
 
@@ -1462,17 +1283,7 @@ class App:
         menu.add_cascade(label="主题", menu=looks, state="disabled" if self.busy else "normal")
         menu.add_command(label="检查更新", command=lambda: self.check_updates(asked=True))
         menu.add_command(label="使用说明", command=lambda: messagebox.showinfo(
-            "ClassicDrop " + __version__, "适用于 Windows 可读取的 iPod classic 原厂曲库。iPod nano 第 3、4 代使用同一种曲库，也可以读写，"
-            "但尚未经真机验证。\n\n"
-            "拖入歌曲或整个文件夹，在「导入预览」核对歌名、歌手、专辑和封面，也可多选一起修改。"
-            "超过 24 位或 48 kHz 的音源和 DSF、DFF 统一转为 24 位 / 48 kHz ALAC。点「确认传入 iPod」，或先加入待传。"
-            "在「传入位置」旁点「新建播放列表」，可以把本次传入的歌曲放进新歌单。传输完成后可点左侧「弹出设备」。\n\n"
-            "传歌时会用内嵌图片生成原厂播放界面的封面。以前传入的歌可点「补齐设备封面」。\n\n"
-            "点「新建播放列表」创建歌单。打开歌单可调序、改名、移出歌曲或删除列表。\n\n"
-            "修改设备名称会更新 iPod 的原厂曲库名称。清空音乐库会清理歌曲和对应音频，保留其他文件。\n\n"
-            "打开索引备份可查看每次改动前的曲库。恢复中断操作用于传歌或删除时意外断开。"
-            "仅在设备显示只读且已知本机标识时，需要手动填写 GUID。\n\n"
-            f"电脑备份位置\n{BACKUPS}\n\n曲库引擎采用 iOpenPod。许可证为 GPL-3.0-or-later。", parent=self.window))
+            "ClassicDrop " + __version__, dialogs.help_text(BACKUPS), parent=self.window))
         menu.tk_popup(self.tools_button.winfo_rootx(), self.tools_button.winfo_rooty() + self.tools_button.winfo_height())
 
     def apple_encoders(self):
@@ -1563,53 +1374,25 @@ class App:
         player = self.device.profile if self.device else None
         model = f"{player.name}（{describe(player)}）" if player else ""
         text = diagnostics.report(model)
-        px = self.px
-        dialog = self.feedback_dialog = tk.Toplevel(self.window)
-        dialog.title("反馈问题")
-        dialog.configure(bg=theme.SURFACE)
-        dialog.resizable(False, False)
-        dialog.transient(self.window)
-        dialog.grab_set()
-        self.window.after(60, theme.title_bar, dialog)
-        frame = tk.Frame(dialog, bg=theme.SURFACE, padx=px(22), pady=px(20))
-        frame.pack(fill="both", expand=True)
-        tk.Label(frame, text="下面的内容会复制到剪贴板。Issue 是公开的，提交前可以在 GitHub 上删改。",
-                 bg=theme.SURFACE, fg=theme.NAVY, font=(theme.FONT, 10)).pack(anchor="w")
-        box = tk.Frame(frame, bg=theme.LINE, padx=1, pady=1)
-        box.pack(fill="both", expand=True, pady=px(12, 0))
-        notes = self.feedback_text = tk.Text(box, wrap="char", height=20, width=58, font=(theme.FONT, 10), bg=theme.BAR,
-                                             fg=theme.NAVY, relief="flat", highlightthickness=0, padx=px(12), pady=px(6),
-                                             cursor="arrow", spacing1=px(1), spacing3=px(1))
-        scroll = ttk.Scrollbar(box, orient="vertical", command=notes.yview)
-        notes.configure(yscrollcommand=scroll.set)
-        notes.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
-        notes.insert("end", text)
-        notes.configure(state="disabled")
-        foot = tk.Frame(frame, bg=theme.SURFACE)
-        foot.pack(fill="x", pady=px(14, 0))
-        def show_logs(_):
+        def show_logs():
             diagnostics.LOGS.mkdir(parents=True, exist_ok=True)
             system.open_folder(diagnostics.LOGS)
-        logs = tk.Label(foot, text="打开日志文件夹", bg=theme.SURFACE, fg=theme.BLUE, cursor="hand2",
-                        font=(theme.FONT, 10, "underline"))
-        logs.pack(side="left")
-        logs.bind("<Button-1>", show_logs)
-        self.feedback_buttons = tk.Frame(foot, bg=theme.SURFACE)
-        self.feedback_buttons.pack(side="right")
+        dialog, notes, _, buttons = dialogs.create_text_dialog(
+            self.window, self.px, title="反馈问题", height=20,
+            intro="下面的内容会复制到剪贴板。Issue 是公开的，提交前可以在 GitHub 上删改。",
+            link_text="打开日志文件夹", on_link=show_logs, on_close=self.close_feedback)
+        self.feedback_dialog, self.feedback_text, self.feedback_buttons = dialog, notes, buttons
+        notes.insert("end", text)
+        notes.configure(state="disabled")
         def copy_and_open():
             self.window.clipboard_clear()
             self.window.clipboard_append(text)
             webbrowser.open(issue_url(model), new=2)
             self.close_feedback()
-        ttk.Button(self.feedback_buttons, text="关闭", command=self.close_feedback).pack(side="left")
-        ttk.Button(self.feedback_buttons, text="复制并打开 GitHub", style="Accent.TButton",
-                   command=copy_and_open).pack(side="left", padx=px(8, 0))
-        dialog.protocol("WM_DELETE_WINDOW", self.close_feedback)
-        dialog.bind("<Escape>", lambda _: self.close_feedback())
-        dialog.update_idletasks()
-        dialog.geometry(f"+{self.window.winfo_rootx() + (self.window.winfo_width() - dialog.winfo_width()) // 2}"
-                        f"+{self.window.winfo_rooty() + (self.window.winfo_height() - dialog.winfo_height()) // 2}")
+        ttk.Button(buttons, text="关闭", command=self.close_feedback).pack(side="left")
+        ttk.Button(buttons, text="复制并打开 GitHub", style="Accent.TButton",
+                   command=copy_and_open).pack(side="left", padx=self.px(8, 0))
+        dialogs.center_dialog(self.window, dialog)
 
     def close_feedback(self):
         if self.feedback_dialog and self.feedback_dialog.winfo_exists():
@@ -1621,46 +1404,19 @@ class App:
         if self.update_dialog and self.update_dialog.winfo_exists():
             return
         px = self.px
-        dialog = self.update_dialog = tk.Toplevel(self.window)
-        dialog.title("版本与更新")
-        dialog.configure(bg=theme.SURFACE)
-        dialog.resizable(False, False)
-        dialog.transient(self.window)
-        dialog.grab_set()
-        self.window.after(60, theme.title_bar, dialog)
-        frame = tk.Frame(dialog, bg=theme.SURFACE, padx=px(22), pady=px(20))
-        frame.pack(fill="both", expand=True)
-        tk.Label(frame, text="ClassicDrop " + __version__, bg=theme.SURFACE, fg=theme.NAVY,
-                 font=(theme.FONT, 14, "bold")).pack(anchor="w")
-        self.version_state = tk.Label(frame, bg=theme.SURFACE, font=(theme.FONT, 9))
-        self.version_state.pack(anchor="w", pady=px(2, 0))
-        box = tk.Frame(frame, bg=theme.LINE, padx=1, pady=1)
-        box.pack(fill="both", expand=True, pady=px(12, 0))
-        notes = self.version_notes = tk.Text(box, wrap="char", height=17, width=58, font=(theme.FONT, 10), bg=theme.BAR,
-                                             fg=theme.NAVY, relief="flat", highlightthickness=0, padx=px(12), pady=px(6),
-                                             cursor="arrow", spacing1=px(1), spacing3=px(1))
-        scroll = ttk.Scrollbar(box, orient="vertical", command=notes.yview)
-        notes.configure(yscrollcommand=scroll.set)
-        notes.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
+        dialog, notes, state_label, buttons = dialogs.create_text_dialog(
+            self.window, px, title="版本与更新", height=17, heading="ClassicDrop " + __version__,
+            link_text="在 GitHub 上查看全部版本",
+            on_link=lambda: webbrowser.open(PROJECT_URL + "/releases", new=2),
+            on_close=self.close_versions)
+        self.update_dialog, self.version_notes, self.version_state, self.version_buttons = (
+            dialog, notes, state_label, buttons)
         notes.tag_configure("version", font=(theme.FONT, 11, "bold"), spacing1=px(9))
         notes.tag_configure("date", foreground=theme.MUTED, font=(theme.FONT, 9))
         notes.tag_configure("new", foreground=theme.ALERT, font=(theme.FONT, 9, "bold"))
         notes.tag_configure("quiet", foreground=theme.MUTED)
-        foot = tk.Frame(frame, bg=theme.SURFACE)
-        foot.pack(fill="x", pady=px(14, 0))
-        everything = tk.Label(foot, text="在 GitHub 上查看全部版本", bg=theme.SURFACE, fg=theme.BLUE, cursor="hand2",
-                              font=(theme.FONT, 10, "underline"))
-        everything.pack(side="left")
-        everything.bind("<Button-1>", lambda _: webbrowser.open(PROJECT_URL + "/releases", new=2))
-        self.version_buttons = tk.Frame(foot, bg=theme.SURFACE)
-        self.version_buttons.pack(side="right")
-        dialog.protocol("WM_DELETE_WINDOW", self.close_versions)
-        dialog.bind("<Escape>", lambda _: self.close_versions())
         self._show_versions((), "正在读取更新记录…", checked=False)
-        dialog.update_idletasks()
-        dialog.geometry(f"+{self.window.winfo_rootx() + (self.window.winfo_width() - dialog.winfo_width()) // 2}"
-                        f"+{self.window.winfo_rooty() + (self.window.winfo_height() - dialog.winfo_height()) // 2}")
+        dialogs.center_dialog(self.window, dialog)
         self.history_stamp += 1
         stamp = self.history_stamp
         def worker():
@@ -1795,8 +1551,7 @@ def main():
     if system.WINDOWS:
         ctypes.windll.user32.SetProcessDPIAware()
     diagnostics.setup()
-    os_name = f"macOS {platform.mac_ver()[0]}" if system.MAC else f"Windows {platform.release()}（{platform.version()}）"
-    diagnostics.log.info("ClassicDrop %s 启动 · %s · 架构 %s", __version__, os_name, cpuarch.describe())
+    diagnostics.log.info("ClassicDrop %s 启动 · %s · 架构 %s", __version__, system.os_label(), cpuarch.describe())
     window = TkinterDnD.Tk()
     app = App(window, browse="album", settings=SETTINGS, check_updates=True)
     if system.MAC:

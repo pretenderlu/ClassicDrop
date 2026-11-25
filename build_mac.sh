@@ -39,7 +39,6 @@ PYI_ARGS=(
     --name ClassicDrop --paths "$ROOT/vendor"
     --workpath "$ROOT/build" --specpath "$ROOT/build" --distpath "$ROOT/dist"
     --icon "$ICON"
-    --add-data "$ROOT/ClassicDrop.ico:."
     --add-data "$ROOT/LICENSE:licenses"
     --add-data "$ROOT/vendor/COPYING.md:licenses"
     --add-data "$ROOT/vendor/iPodDB/iTunesDB/writer/calcHashAB.wasm.b64:iPodDB/iTunesDB/writer"

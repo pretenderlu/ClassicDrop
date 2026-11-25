@@ -1,6 +1,5 @@
 import logging
 from pathlib import Path
-import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest

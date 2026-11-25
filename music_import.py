@@ -14,12 +14,11 @@ from mutagen.mp4 import MP4, MP4Cover
 from mutagen.wave import WAVE
 
 import system
-from audio_convert import ASK_FORMAT, READERS, lossless_profile, needs_48k_alac, riff_tags, source_audio, source_tags, tag_text
+from audio_convert import (ASK_FORMAT, GENERIC_FOLDERS, READERS, is_native_playable, lossless_profile,
+                           needs_48k_alac, riff_tags, source_audio, source_tags, tag_text)
 
 FIELDS = ("title", "artist", "album")
 PICTURES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
-GENERIC_FOLDERS = {"music", "my music", "audio", "downloads", "desktop", "documents", "albums", "flac", "wav", "dsd", "dsf", "dff",
-                   "mp3", "lossless", "音乐", "音樂", "下载", "下載", "歌曲", "专辑", "專輯", "无损音乐", "无损", "無損"}
 DISC = re.compile(r"(?:cd|disc|disk|碟|碟片|光盘|光盤)[\s._-]*0*(?:\d+|[ivx]+)(?:\s*[-–—].*)?", re.I)
 YEAR = re.compile(r"^(?:\[(?:19|20)\d{2}\]|【(?:19|20)\d{2}】|(?:19|20)\d{2}(?=\s|[._–—-]))[\s._–—-]*")
 
@@ -147,8 +146,9 @@ def _folder_cover(folder):
         if re.search(r"(?:^|[\W_])(?:front|cover)(?:$|[\W_])", name) or "封面" in name or name.startswith("albumart"):
             return len(names)
         return len(names) + 1
-    for path in sorted(images, key=rank):
-        if rank(path) > len(names) and len(images) != 1:
+    ranked = sorted(((rank(path), path) for path in images), key=lambda item: item[0])
+    for score, path in ranked:
+        if score > len(names) and len(images) != 1:
             continue
         try:
             return Cover.from_file(path)
@@ -256,10 +256,7 @@ def _read_song(path, folder_covers):
         exact = lossless_profile(path, audio)
         choices = ("alac", "copy", "aac") if exact and suffix == ".wav" else (("alac" if exact else "alac-fit"), "aac")
     else:
-        info = audio.info
-        playable = (0 < info.sample_rate <= 48000 and info.channels in (1, 2)
-                    and (info.layer == 3 if suffix == ".mp3" else info.codec.lower() in ("alac", "mp4a.40.2")))
-        choices = ("copy", "aac") if playable else ("aac",)
+        choices = ("copy", "aac") if is_native_playable(suffix, audio.info) else ("aac",)
     return ImportSong(path, stamp, original[0] or path.stem, original[1] or tag_text(tags, "albumartist") or artist,
                       original[2] or album, cover, choices[0], choices, original, embedded)
 

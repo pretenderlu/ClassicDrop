@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from threading import Thread
 import wave
 from urllib.request import Request, urlopen
 
@@ -31,12 +32,6 @@ APPLE_DLLS = ("ASL.dll", "CoreAudioToolbox.dll", "CoreFoundation.dll", "objc.dll
               "libicuin.dll", "libicuuc.dll", "msvcp140.dll", "vcruntime140.dll")
 
 _probe_cache = None
-
-
-def _powershell(command, timeout=120):
-    ps = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
-    return subprocess.run([str(ps), "-NoProfile", "-NonInteractive", "-Command", command],
-                          capture_output=True, timeout=timeout, **system.NO_WINDOW)
 
 
 def _run(args, error, timeout=900):
@@ -89,8 +84,9 @@ def apple_source():
 
 
 def refresh():
-    global _probe_cache
+    global _probe_cache, _afconvert_cache
     _probe_cache = None
+    _afconvert_cache = None
 
 
 AFCONVERT = "/usr/bin/afconvert"
@@ -156,7 +152,7 @@ def refalac():
     return (str(REFALAC), dict(os.environ)) if REFALAC.is_file() else None
 
 
-def pipe_encode(exe, env, tool_args, decode_args, raw_format, destination):
+def pipe_encode(exe, env, tool_args, decode_args, raw_format, destination, timeout=900):
     """FFmpeg decodes to raw PCM on stdout; the external encoder reads it on stdin.
 
     Raises ValueError when either side fails; the caller deletes the partial file.
@@ -165,16 +161,44 @@ def pipe_encode(exe, env, tool_args, decode_args, raw_format, destination):
                                 *decode_args, "-f", raw_format, "pipe:1"],
                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                **system.NO_WINDOW)
-    encoder = subprocess.Popen([exe, *tool_args, "-", "-o", str(destination)],
-                               stdin=decoder.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                               **system.NO_WINDOW, env=env)
-    decoder.stdout.close()
-    encoder_error = encoder.communicate()[1]
-    decoder.wait()
-    decoder_error = decoder.stderr.read()
-    decoder.stderr.close()
+    encoder = None
+    decoder_tail = bytearray()
+    def drain_decoder():
+        try:
+            while chunk := decoder.stderr.read(4096):
+                decoder_tail.extend(chunk)
+                if len(decoder_tail) > 65536:
+                    del decoder_tail[:-32768]
+        finally:
+            decoder.stderr.close()
+    drainer = Thread(target=drain_decoder, daemon=True)
+    drainer.start()
+    try:
+        encoder = subprocess.Popen([exe, *tool_args, "-", "-o", str(destination)],
+                                   stdin=decoder.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                   **system.NO_WINDOW, env=env)
+        decoder.stdout.close()
+        try:
+            encoder_error = encoder.communicate(timeout=timeout)[1]
+            decoder.wait(timeout=30)
+        except subprocess.TimeoutExpired as exc:
+            for proc in (encoder, decoder):
+                proc.kill()
+            encoder.wait()
+            decoder.wait()
+            raise ValueError(f"{Path(exe).stem} 编码超时。") from exc
+    except BaseException:
+        for proc in (encoder, decoder):
+            if proc is not None and proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        if decoder.stdout and not decoder.stdout.closed:
+            decoder.stdout.close()
+        raise
+    finally:
+        drainer.join(timeout=5)
     if decoder.returncode or encoder.returncode:
-        detail = " ".join(t for t in (decoder_error.decode("utf8", "replace").strip()[-400:],
+        detail = " ".join(t for t in (bytes(decoder_tail).decode("utf8", "replace").strip()[-400:],
                                       encoder_error.decode("utf8", "replace").strip()[-400:]) if t)
         raise ValueError(f"{Path(exe).stem} 编码失败（退出码 {decoder.returncode}/{encoder.returncode}）。{detail}")
 
@@ -188,10 +212,10 @@ def _download(url, destination, report):
             while chunk := reply.read(1 << 20):
                 out.write(chunk)
                 done += len(chunk)
-                share = done * 100 // total if total else 0
-                if share != shown:
-                    shown = share
-                    report(f"正在下载 iTunes 安装包 {done / 2**20:.0f} MB" + (f" · {share}%" if total else ""))
+                mark = (done * 100 // total) if total else (done >> 20)
+                if mark != shown:
+                    shown = mark
+                    report(f"正在下载 iTunes 安装包 {done / 2**20:.0f} MB" + (f" · {mark}%" if total else ""))
     if total and done != total:
         raise ValueError("iTunes 安装包下载不完整，请重试。")
 
@@ -199,7 +223,7 @@ def _download(url, destination, report):
 def _verify_signature(installer):
     """The iTunes installer must carry Apple's valid Authenticode signature."""
     quoted = str(installer).replace("'", "''")
-    proc = _powershell(f"$s = Get-AuthenticodeSignature -LiteralPath '{quoted}'; $s.Status; $s.SignerCertificate.Subject")
+    proc = system.powershell(f"$s = Get-AuthenticodeSignature -LiteralPath '{quoted}'; $s.Status; $s.SignerCertificate.Subject")
     lines = proc.stdout.decode("utf8", "replace").splitlines()
     if not lines or lines[0].strip() != "Valid" or "O=Apple Inc." not in "".join(lines[1:]):
         raise ValueError("下载的 iTunes 安装包没有通过 Apple 签名验证，已放弃。")
