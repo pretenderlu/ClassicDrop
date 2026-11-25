@@ -1,10 +1,10 @@
-# ClassicDrop 1.5.3
+# ClassicDrop 1.5.4
 
 Windows x64 下的 iPod classic 原厂曲库工具。面向已经有原厂曲库的 IPC3（2009 年末 160 GB 薄款）。所有日常操作都在本地完成。iPod nano 第 3、4 代使用同一种曲库，也可以读写，但还没有在真机上验证过，见「支持的机型」。
 
 ## 安装与更新
 
-从 [Releases](https://github.com/pretenderlu/ClassicDrop/releases) 下载 `ClassicDropSetup-v1.5.3.exe` 并运行。程序装在 `%LOCALAPPDATA%\Programs\ClassicDrop`，安装和卸载都不需要管理员权限。同一页面的 `ClassicDrop-Windows-x64.zip` 是免安装版，解压后运行其中的 ClassicDrop.exe。
+从 [Releases](https://github.com/pretenderlu/ClassicDrop/releases) 下载 `ClassicDropSetup-v1.5.4.exe` 并运行。程序装在 `%LOCALAPPDATA%\Programs\ClassicDrop`，安装和卸载都不需要管理员权限。同一页面的 `ClassicDrop-Windows-x64.zip` 是免安装版，解压后运行其中的 ClassicDrop.exe。
 
 启动后程序会向 GitHub 查询最新的正式版本。窗口右下角有 GitHub 链接和当前版本号。点版本号可以查看各个版本的更新记录。有新版本时，版本号旁边会出现一个红点，更新记录里会多出「下载并安装」按钮。点它之后程序下载安装包，核对 GitHub 提供的 SHA-256 校验值，再自动安装并重新打开。正在传歌，或待传列表里还有歌曲时，需要先处理完再更新。也可以随时点「工具与备份 → 检查更新」。下载失败时可以重试，或打开发布页手动下载。查询只访问 GitHub 的发布接口，不上传任何曲库或设备信息。
 
@@ -71,7 +71,7 @@ nano 第 3、4 代的曲库格式和校验方式与 classic 相同。程序按�
 
 「工具与备份 → 主题」可在浅色和深色之间切换，立即生效。主题和浏览方式保存在 `%LOCALAPPDATA%\ClassicDrop\settings.json`。系统自带的菜单、提示框和文件选择窗口沿用 Windows 的外观。
 
-在「所有歌曲」或歌单中可搜索歌名、歌手和专辑。曲目表的「评级」和「播放」两列显示每首歌的星级和播放次数，包括在 iPod 上打的星和上次同步后新增的播放。这些来自曲库和 iPod 自己的 `Play Counts` 记录。程序只读取它们，目前不能在软件里修改评级。右键或点「选中项操作」可以导出原始音频到电脑，双击一首歌可修改机内曲库的歌名、歌手和专辑。
+在「所有歌曲」或歌单中可搜索歌名、歌手和专辑。曲目表的「评级」和「播放」两列显示每首歌的星级和播放次数，包括在 iPod 上打的星和上次同步后新增的播放。这些来自曲库和 iPod 自己的 `Play Counts` 记录。选中一首或多首歌，右键点「评级」可以设为 1 到 5 星或清除。保存评级时，程序会像 iTunes 同步那样把 `Play Counts` 里的星级和播放次数合并进曲库，再移除这个文件，改动前的文件备份在电脑上。传歌和删除不会合并它。右键或点「选中项操作」可以导出原始音频到电脑，双击一首歌可修改机内曲库的歌名、歌手和专辑。
 
 修正以前传入的歌曲时，可多选同一位歌手的歌曲，右键点「批量修改歌手」并填写名字。此操作更新原厂曲库中的歌手，保留音频文件、播放次数和歌单关系。
 

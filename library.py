@@ -213,6 +213,27 @@ def listening(device):
     return {t.track_id: (t.rating, t.play_count) for t in library.snapshot.tracks}
 
 
+def with_listening(device):
+    """The device with its Play Counts laid over the library, and that file's bytes; (device, None) without one.
+
+    A library written from this state contains the stars and plays recorded on the iPod, so the file must be
+    retired in the same operation or they would be counted again.
+    """
+    file = inside(device.root, PLAY_COUNTS)
+    if not file.is_file():
+        return device, None
+    try:
+        if file.stat().st_size > MAX_SIDECAR_BYTES:
+            raise ValueError("文件过大。")
+        data = file.read_bytes()
+        merged = device.library.with_sidecars((PlaybackSidecar("Play Counts", data),))
+        if merged.sidecar_issues:
+            raise ValueError(merged.sidecar_issues[0].message)
+    except ValueError as error:
+        raise ValueError(f"无法合并 iPod 上的播放记录（Play Counts），已停止保存。\n{error}") from error
+    return replace(device, library=merged), data
+
+
 @dataclass
 class Addition:
     source: Path

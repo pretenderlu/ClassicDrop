@@ -1110,6 +1110,16 @@ class App:
             self._work("正在导出歌曲…", lambda report: export_tracks(dev, tracks, folder, report),
                        lambda n: self.status.set(f"新导出 {n} 首到 {folder}。相同内容已跳过。"))
 
+    def rate(self, rating):
+        """Give the selected songs this rating, from 0 to 100. Saving also merges what the iPod recorded."""
+        dev, tracks = self.device, self.selected()
+        if self.busy or not dev or not dev.guid or not tracks or self.view == "queue":
+            return
+        ratings = {t.track_id: rating for t in tracks}
+        done = f"已将 {len(ratings)} 首歌曲评为 {'★' * (rating // 20)}。" if rating else f"已清除 {len(ratings)} 首歌曲的评级。"
+        self._work("正在保存评级…", lambda report: transfer(dev, [], BACKUPS, report, ratings=ratings),
+                   lambda _: self.load(dev.root, dev.guid.hex(), done))
+
     def context_click(self, event):
         row = self.tree.identify_row(event.y)
         if row and row not in self.tree.selection():
@@ -1131,6 +1141,12 @@ class App:
             menu.add_command(label="批量修改歌手" if len(selected) > 1 else "编辑歌曲信息",
                              state="normal" if writable and selected else "disabled",
                              command=self.edit_tags)
+            stars = tk.Menu(menu, tearoff=False)
+            for count in (5, 4, 3, 2, 1):
+                stars.add_command(label="★" * count, command=lambda count=count: self.rate(count * 20))
+            stars.add_separator()
+            stars.add_command(label="清除评级", command=lambda: self.rate(0))
+            menu.add_cascade(label="评级", menu=stars, state="normal" if writable and selected else "disabled")
             menu.add_separator()
             menu.add_command(label="新建歌单", state="normal" if writable else "disabled", command=self.change_playlist)
             editable = [p for p in self.device.library.snapshot.playlists if editable_playlist(p)] if self.device else []

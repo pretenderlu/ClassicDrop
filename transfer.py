@@ -17,6 +17,8 @@ from iPodDB.library import WriteResources
 from library import (DB, MUSIC, STAGE, delete_playlist, fingerprint, inside, is_music, playlist_edit, prepared_database,
                      select_additions, validate_playlist_name, without_music, write_file)
 from native_covers import prepare_covers, publish_covers, settle_covers
+from library import with_listening
+from removal import merge_receipt
 from removal import GENIUS, genius_source, checked_receipt, quarantine, removal_receipt, settle_removal
 
 NEW_FILE = re.compile(r"iPod_Control/Music/F\d{2}/CD[0-9A-F]{12}\.(?:mp3|m4a|wav)", re.I)
@@ -138,9 +140,11 @@ def recover_interrupted(device, backups=None):
 
 
 def transfer(device, files, backups, report=lambda _: None, *, desired=None, remove_ids=(),
-             formats=None, playlist_id=None, new_playlist_name=None, delete_playlist_id=None, repair_covers=False, reviewed=None):
+             formats=None, playlist_id=None, new_playlist_name=None, delete_playlist_id=None, repair_covers=False, reviewed=None,
+             ratings=None):
+    """ratings maps track ids to a new rating from 0 to 100, in steps of 20 for whole stars."""
     removed = frozenset(remove_ids)
-    if sum((bool(files), desired is not None, bool(removed), delete_playlist_id is not None, repair_covers)) > 1:
+    if sum((bool(files), desired is not None, bool(removed), delete_playlist_id is not None, repair_covers, bool(ratings))) > 1:
         raise ValueError("传歌、删除和其他编辑需要分别提交。")
     if playlist_id is not None and new_playlist_name is not None:
         raise ValueError("一次传输只能选择一个目标播放列表。")
@@ -152,6 +156,17 @@ def transfer(device, files, backups, report=lambda _: None, *, desired=None, rem
         validate_playlist_name(device.library.snapshot, new_playlist_name)
     with prepared_files(files, formats, device.root, report, reviewed=reviewed) as ready, device_lock(device) as release_database, ExitStack() as stack:
         recover(device, backups)
+        counts = None
+        if ratings:
+            if any(type(value) is not int or not 0 <= value <= 100 for value in ratings.values()):
+                raise ValueError("评级必须在 0 到 100 之间。")
+            # Stars given on the iPod live in its Play Counts file and would override the library's,
+            # so they are merged into the library here and the file is retired with the commit.
+            device, counts = with_listening(device)
+            if not set(ratings) <= {t.track_id for t in device.library.snapshot.tracks}:
+                raise ValueError("有曲目已不在当前曲库中。请刷新后再操作。")
+            desired = replace(device.library.snapshot, tracks=tuple(
+                replace(t, rating=ratings[t.track_id]) if t.track_id in ratings else t for t in device.library.snapshot.tracks))
         before = device.library.snapshot
         if removed:
             desired = without_music(before, removed)
@@ -181,6 +196,9 @@ def transfer(device, files, backups, report=lambda _: None, *, desired=None, rem
             prepared = prepared_database(device, additions, desired, removed=removed, delete_playlist_id=delete_playlist_id,
                                          resources=WriteResources(genius_source=source) if source else None)
             database = prepared.itunes
+            if ratings and any((made.rating, made.play_count) != (wanted.rating, wanted.play_count)
+                               for made, wanted in zip(prepared.snapshot.tracks, desired.tracks, strict=True)):
+                raise ValueError("新曲库的评级或播放次数与预期不一致。")
             if on_device is not None and prepared.genius is not None:
                 genius = on_device, prepared.genius
         new_hash = hashlib.sha256(database).hexdigest()
@@ -199,11 +217,15 @@ def transfer(device, files, backups, report=lambda _: None, *, desired=None, rem
         backup_dir = Path(backups) / device.guid.hex() / device.version[:20]
         backup = backup_bytes(backup_dir / "iTunesDB", device.original, device.version)
         receipt = None
-        if removed:
+        if counts is not None:
+            old_counts = hashlib.sha256(counts).hexdigest()
+            backup_bytes(backup_dir / ("Play Counts-" + old_counts), counts, old_counts)
+        if removed or counts is not None:
             if genius and genius[0] != genius[1]:
                 old_genius = hashlib.sha256(genius[0]).hexdigest()
                 backup_bytes(backup_dir / (GENIUS + "-" + old_genius), genius[0], old_genius)
-            receipt = removal_receipt(device, desired, new_hash, report, genius)
+            receipt = (removal_receipt(device, desired, new_hash, report, genius) if removed
+                       else merge_receipt(device, new_hash, counts))
             payload = json.dumps(receipt, ensure_ascii=False, separators=(",", ":")).encode("utf8")
             digest = hashlib.sha256(payload).hexdigest()
             backup_bytes(backup_dir / f"delete-{digest}.json", payload, digest)

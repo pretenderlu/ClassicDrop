@@ -144,6 +144,19 @@ def removal_receipt(device, desired, after_hash, report, genius=None):
                 media=list(media.values()), sidecars=updates)
 
 
+def merge_receipt(device, after_hash, counts):
+    """A receipt that retires Play Counts once its stars and plays are part of the committed library."""
+    updates = {}
+    for name, path in _sidecars(device).items():
+        data = path.read_bytes()
+        readonly = bool(path.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY)
+        retire = name.casefold() == "play counts"
+        if retire and data != counts:
+            raise ValueError("设备上的播放记录已变化，请刷新后重试。")
+        updates[name] = [_digest(data), None if retire else "same", readonly]
+    return dict(before=device.version, after=after_hash, guid=device.guid.hex(), media=[], sidecars=updates)
+
+
 def quarantine(device, receipt, report):
     slots = inside(device.root, STAGE + "/removed")
     slots.mkdir()

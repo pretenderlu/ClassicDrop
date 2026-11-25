@@ -5,10 +5,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from test_classicdrop import FIXTURES, Device, mock_device
+from test_classicdrop import FIXTURES, GUID, Device, mock_device
 from test_native_covers import covered_m4a
 import app
-from library import PLAY_COUNTS, listening
+from iPodDB.iTunesDB.writer.signature import verify_hash58
+from library import DB, PLAY_COUNTS, STAGE, listening
 from transfer import transfer
 
 
@@ -97,3 +98,50 @@ class ListeningTests(unittest.TestCase):
             ui.view = "queue"
             ui.render()
             self.assertNotIn("评级", [ui.tree.heading(c, "text") for c in ui.tree["columns"]])
+
+
+class RatingTests(ListeningTests):
+    def rate(self, ratings, **kwargs):
+        transfer(self.device, [], self.site / "backups", ratings={self.ids[n]: value for n, value in ratings.items()}, **kwargs)
+        self.device = Device.open(self.root)
+        return [(t.rating, t.play_count) for t in self.device.library.snapshot.tracks]
+
+    def test_rating_merges_what_the_ipod_recorded_and_retires_its_file(self):
+        file = write_play_counts(self.root, [(3, 100), (0, None), (1, 50)])
+        recorded = file.read_bytes()
+        self.assertEqual(self.rate({1: 80}), [(100, 3), (80, 0), (50, 1)])
+        self.assertFalse(file.exists() or (self.root / STAGE).exists())
+        self.assertTrue(verify_hash58(self.device.original, GUID))
+        saved, = (self.site / "backups").rglob("Play Counts-*")
+        self.assertEqual(saved.read_bytes(), recorded)
+        # Nothing is counted twice, and a later change needs no file.
+        self.assertEqual(self.heard(), [(100, 3), (80, 0), (50, 1)])
+        self.assertEqual(self.rate({0: 0, 2: 100}), [(0, 3), (80, 0), (100, 1)])
+        before = (self.root / DB).read_bytes()
+        self.assertEqual(self.rate({1: 80}), [(0, 3), (80, 0), (100, 1)])  # unchanged: nothing is written
+        self.assertEqual((self.root / DB).read_bytes(), before)
+
+    def test_interrupted_rating_keeps_library_and_records(self):
+        file = write_play_counts(self.root, [(3, 100), (0, None), (1, 50)])
+        before = (self.root / DB).read_bytes(), file.read_bytes()
+        def interrupt(message):
+            if message == "提交曲库…":
+                raise SystemExit
+        with self.assertRaises(SystemExit):
+            self.rate({1: 80}, report=interrupt)
+        from transfer import recover_interrupted
+        recover_interrupted(self.device, self.site / "backups")
+        self.assertEqual(((self.root / DB).read_bytes(), file.read_bytes()), before)
+        self.assertFalse((self.root / STAGE).exists())
+
+    def test_invalid_ratings_and_records_stop_before_writing(self):
+        before = (self.root / DB).read_bytes()
+        for ratings, text in (({0: 120}, "0 到 100"), ({0: 2.5}, "0 到 100")):
+            with self.assertRaisesRegex(ValueError, text):
+                self.rate(ratings)
+        with self.assertRaisesRegex(ValueError, "已不在当前曲库"):
+            transfer(self.device, [], self.site / "backups", ratings={987654: 60})
+        (self.root / PLAY_COUNTS).write_bytes(b"not a play counts file")
+        with self.assertRaisesRegex(ValueError, "无法合并 iPod 上的播放记录"):
+            self.rate({0: 60})
+        self.assertEqual(((self.root / DB).read_bytes(), (self.root / STAGE).exists()), (before, False))
