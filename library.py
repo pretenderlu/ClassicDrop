@@ -19,6 +19,7 @@ from audio_convert import lossless_profile, needs_48k_alac, source_audio, source
 
 from iPodDB.iTunesDB.writer.signature import verify_hash58
 from iPodDB.library.genius import reconcile_genius_playlists
+from iPodDB.sidecars import MAX_SIDECAR_BYTES, PlaybackSidecar
 from iPodDB.library import (
     AudioEncoding, FileDependency, IPodLibrary, MediaType, Playlist, PlaylistKind, Track, TrackMetadata,
     PlaylistSortOrder, WriteChecksum, WriteResources, WriteTarget, playlist_entries, prepared_audio,
@@ -27,6 +28,7 @@ from iPodDB.library import (
 DB = "iPod_Control/iTunes/iTunesDB"
 MUSIC = "iPod_Control/Music"
 STAGE = "iPod_Control/iTunes/ClassicDrop.transfer"
+PLAY_COUNTS = "iPod_Control/iTunes/Play Counts"
 FORMATS = (".mp3", ".m4a", ".wav")
 MUSIC_SUFFIXES = {".mp3", ".m4a", ".m4p", ".aac", ".mp4", ".wav", ".wave", ".aif", ".aiff", ".aifc"}
 MAX_DB = 256 * 1024 * 1024
@@ -190,6 +192,25 @@ class Device:
         if not current or current.casefold() != self.usb_instance.casefold():
             raise OSError("盘符对应的 iPod 已断开或改变，请刷新设备。")
         _request_usb_eject(current)
+
+
+def listening(device):
+    """Rating, from 0 to 100, and play count of every track as the iPod itself shows them, by track id.
+
+    Stars given and songs played on the iPod stay in its Play Counts file until a sync merges them into the
+    library. This lays that file over the library without changing either. Without a usable file, the
+    library's own values are returned.
+    """
+    library = device.library
+    try:
+        file = inside(device.root, PLAY_COUNTS)
+        if file.is_file() and 0 < file.stat().st_size <= MAX_SIDECAR_BYTES:
+            merged = library.with_sidecars((PlaybackSidecar("Play Counts", file.read_bytes()),))
+            if not merged.sidecar_issues and len(merged.snapshot.tracks) == len(library.snapshot.tracks):
+                library = merged
+    except Exception:
+        pass
+    return {t.track_id: (t.rating, t.play_count) for t in library.snapshot.tracks}
 
 
 @dataclass

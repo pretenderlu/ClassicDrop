@@ -13,10 +13,11 @@ from dataclasses import replace
 from pathlib import Path
 
 from audio_convert import prepared_files
+from iPodDB.library import WriteResources
 from library import (DB, MUSIC, STAGE, delete_playlist, fingerprint, inside, is_music, playlist_edit, prepared_database,
                      select_additions, validate_playlist_name, without_music, write_file)
 from native_covers import prepare_covers, publish_covers, settle_covers
-from removal import checked_receipt, quarantine, removal_receipt, settle_removal
+from removal import GENIUS, genius_source, checked_receipt, quarantine, removal_receipt, settle_removal
 
 NEW_FILE = re.compile(r"iPod_Control/Music/F\d{2}/CD[0-9A-F]{12}\.(?:mp3|m4a|wav)", re.I)
 
@@ -172,10 +173,18 @@ def transfer(device, files, backups, report=lambda _: None, *, desired=None, rem
         if not covers and not additions and (desired is None or desired == before):
             return 0, missing if repair_covers else skipped, None
         report("生成曲库并核对原有歌曲、播放列表及设备校验值…")
-        database = covers.database if covers else prepared_database(
-            device, additions, desired, removed=removed, delete_playlist_id=delete_playlist_id).itunes
+        genius = None
+        if covers:
+            database = covers.database
+        else:
+            source, on_device = genius_source(device, removed)
+            prepared = prepared_database(device, additions, desired, removed=removed, delete_playlist_id=delete_playlist_id,
+                                         resources=WriteResources(genius_source=source) if source else None)
+            database = prepared.itunes
+            if on_device is not None and prepared.genius is not None:
+                genius = on_device, prepared.genius
         new_hash = hashlib.sha256(database).hexdigest()
-        needed = len(database) + sum(item.dependency.size for item in additions)
+        needed = len(database) + sum(item.dependency.size for item in additions) + (len(genius[1]) if genius else 0)
         if covers:
             growth = peak = 0
             for path, old_size, _, _ in covers.records:
@@ -191,7 +200,10 @@ def transfer(device, files, backups, report=lambda _: None, *, desired=None, rem
         backup = backup_bytes(backup_dir / "iTunesDB", device.original, device.version)
         receipt = None
         if removed:
-            receipt = removal_receipt(device, desired, new_hash, report)
+            if genius and genius[0] != genius[1]:
+                old_genius = hashlib.sha256(genius[0]).hexdigest()
+                backup_bytes(backup_dir / (GENIUS + "-" + old_genius), genius[0], old_genius)
+            receipt = removal_receipt(device, desired, new_hash, report, genius)
             payload = json.dumps(receipt, ensure_ascii=False, separators=(",", ":")).encode("utf8")
             digest = hashlib.sha256(payload).hexdigest()
             backup_bytes(backup_dir / f"delete-{digest}.json", payload, digest)

@@ -5,6 +5,7 @@ drawing, and avoid importing them by name, so that a theme change reaches every 
 """
 
 import ctypes
+import re
 import tkinter as tk
 from tkinter import ttk
 
@@ -20,7 +21,7 @@ PALETTES = {
         ACCENT_HOVER="#2f72c8", ACCENT_PRESSED="#184a88", OFF_FILL="#dfe6ef", OFF_TEXT="#576985", THUMB="#c9d2de",
         THUMB_HOVER="#a3afc0", THUMB_PRESSED="#8696aa", OK_FILL="#e2f3e8", OK_TEXT="#1c6638", WARN_FILL="#fbefd3",
         WARN_TEXT="#7d5200", FLOW="#f1f4f8", FLOW_TITLE="#18283e", FLOW_DETAIL="#526378", FLOW_MIRROR=0.42,
-        FLOW_SHADE=0.16),
+        FLOW_SHADE=0.16, ALERT="#d92d3a"),
     "dark": dict(
         NAVY="#e4e9f0", BLUE="#3f86e6", MUTED="#9aa7b8", LINE="#2c3543", SIDE="#151a22", SURFACE="#1c222c",
         BAR="#171c25", STRIPE="#202733", HOVER="#2a3445", FIELD_LINE="#3b4758", FAINT="#6c798b", HOVER_LINE="#5b7fb5",
@@ -28,7 +29,7 @@ PALETTES = {
         ACCENT_HOVER="#5797ee", ACCENT_PRESSED="#3572c8", OFF_FILL="#272e3a", OFF_TEXT="#75828f", THUMB="#3c4758",
         THUMB_HOVER="#566479", THUMB_PRESSED="#6f7e96", OK_FILL="#1c3a29", OK_TEXT="#86d8a5", WARN_FILL="#3f3219",
         WARN_TEXT="#e8c27c", FLOW="#0f131a", FLOW_TITLE="#ffffff", FLOW_DETAIL="#9aa7b8", FLOW_MIRROR=0.5,
-        FLOW_SHADE=0.22),
+        FLOW_SHADE=0.22, ALERT="#ff6b6b"),
 }
 CURRENT = "light"
 ICON = None  # path of the .ico file, set by the application
@@ -107,6 +108,31 @@ def blank_cover(side):
     pen.rectangle([round(v * unit * 4) for v in (4.4, 2.4, 5, 6.8)], fill=FIELD_LINE)
     pen.polygon([round(v * unit * 4) for v in (4.4, 2.4, 7.4, 1.6, 7.4, 3.2, 4.4, 4)], fill=FIELD_LINE)
     return image.resize((side, side), Image.Resampling.LANCZOS)
+
+
+def wrap_lines(text, measure, width):
+    """Break text into lines no wider than width, as measured by measure.
+
+    Tk only breaks a line at a space, which leaves Chinese text ragged. Here a line may also end between two
+    Chinese characters, but never inside a Latin word or just before closing punctuation. The later lines of
+    a bullet are indented to sit under its text.
+    """
+    lines = []
+    for paragraph in text.split("\n"):
+        bullet = re.match(r"\s*· ", paragraph)
+        hang = " " * round(measure(bullet[0]) / measure(" ")) if bullet else ""
+        line, wrapped = "", False
+        for piece in re.findall(r"(?:[!-~]+|[^\s!-~])[，。、；：！？）」』》]*|\s+", paragraph):
+            if piece.isspace():
+                if not (wrapped and line == hang):  # a space that fell on the break is dropped
+                    line += piece
+            elif line.strip() and measure(line + piece) > width:
+                lines.append(line.rstrip())
+                line, wrapped = hang + piece, True
+            else:
+                line += piece
+        lines.append(line.rstrip())
+    return "\n".join(lines)
 
 
 def scaler(widget):

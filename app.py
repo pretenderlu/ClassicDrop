@@ -13,7 +13,7 @@ import tempfile
 from threading import Lock, Thread
 import webbrowser
 import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import filedialog, font as tkfont, messagebox, simpledialog, ttk
 
 BASE = Path(__file__).resolve().parent
 if not getattr(sys, "frozen", False):
@@ -26,11 +26,11 @@ from coverflow import CoverFlow
 from device_identity import describe
 from import_dialog import AUDIO_TYPES, ImportDialog, NewPlaylist, playlist_targets
 import theme
-from library import (DB, Device, editable_playlist, is_music, move_playlist_entries, playlist_edit, rename_device,
+from library import (DB, Device, editable_playlist, is_music, listening, move_playlist_entries, playlist_edit, rename_device,
                      rename_playlist)
 from native_covers import device_covers, load_cover
 from transfer import STAGE, export_tracks, recover_interrupted, transfer
-from updates import check_for_updates, download_update
+from updates import PROJECT_URL, Release, check_for_updates, download_update, plain_notes, release_history, version_key
 from version import __version__
 
 BACKUPS = Path(os.environ["LOCALAPPDATA"]) / "ClassicDrop" / "Backups"
@@ -50,6 +50,7 @@ class App:
         """
         self.window = window
         self.latest_update = self.update_dialog = None
+        self.history_stamp = 0
         self.settings = settings
         saved = {}
         if settings:
@@ -83,6 +84,7 @@ class App:
         self.group_shown = None
         self.covers, self.cover_reads, self.sharp_covers, self.cover_thumbs = {}, {}, {}, {}
         self.nav_shown = self.columns_shown = self.usage = None
+        self.listening = {}
         self.cover_images = {}
         self.cover_pending = set()
         self.cover_stamp = 0
@@ -260,9 +262,21 @@ class App:
         statusbar.grid(row=1, columnspan=2, sticky="ew")
         tk.Label(statusbar, textvariable=self.status, bg=theme.BAR, fg=theme.MUTED, anchor="w",
                  padx=px(16), pady=px(6), font=(theme.FONT, 9)).pack(side="left", fill="x", expand=True)
-        self.update_button = tk.Label(statusbar, bg=theme.BLUE, fg=theme.ACCENT_TEXT, cursor="hand2", padx=px(10),
-                                      font=(theme.FONT, 9, "bold"))
-        self.update_button.bind("<Button-1>", lambda _: self.open_update())
+        links = tk.Frame(statusbar, bg=theme.BAR)
+        links.pack(side="right", padx=px(0, 14))
+        def link(text, action):
+            label = tk.Label(links, text=text, bg=theme.BAR, fg=theme.MUTED, cursor="hand2", font=(theme.FONT, 9))
+            label.bind("<Button-1>", lambda _: action())
+            label.bind("<Enter>", lambda _: label.configure(fg=theme.BLUE))
+            label.bind("<Leave>", lambda _: label.configure(fg=theme.MUTED))
+            return label
+        self.github_link = link("GitHub", lambda: webbrowser.open(PROJECT_URL, new=2))
+        self.github_link.pack(side="left", padx=px(0, 14))
+        self.version_link = link("v" + __version__, self.open_versions)
+        self.version_link.pack(side="left")
+        # Shown beside the version number while a newer release is waiting.
+        self.update_dot = tk.Label(links, text="●", bg=theme.BAR, fg=theme.ALERT, cursor="hand2", font=(theme.FONT, 7))
+        self.update_dot.bind("<Button-1>", lambda _: self.open_versions())
         self._offer_update()
 
     def _search_changed(self, *_):
@@ -326,6 +340,8 @@ class App:
                     self._track_progress(data)
                 elif kind == "update":
                     self._update_checked(*data)
+                elif kind == "history":
+                    self._history_arrived(*data)
                 elif kind == "cover":
                     stamp, art, image = data
                     self.cover_pending.discard(art)
@@ -441,10 +457,11 @@ class App:
             side = self.px(40)
             covers.extend((small, large, {art: image.resize((side, side), Image.Resampling.LANCZOS)
                                           for art, image in small.items()}))
+            covers.append(listening(device))
             return device
         def loaded(device):
             self.device = device
-            self.usage, self.covers, self.cover_reads, self.cover_thumbs = covers
+            self.usage, self.covers, self.cover_reads, self.cover_thumbs, self.listening = covers
             self.sharp_covers, self.cover_images, self.group_shown = {}, {}, None
             self.cover_pending.clear()
             self.cover_stamp += 1
@@ -706,17 +723,18 @@ class App:
         # One album at a time is listed in track order, with the track number in front.
         numbered = bool(snap) and not queue_view and self.browse != "all"
         columns = (("歌名", 210), ("歌手", 130), ("专辑", 140), ("传输格式", 140)) if queue_view else (
-            ("歌名", 225), ("歌手", 132), ("专辑", 160), ("时长", 60))
+            ("歌名", 225), ("歌手", 132), ("专辑", 160), ("评级", 84), ("播放", 46), ("时长", 60))
         if numbered:
-            columns = (("#", 46), *columns)
+            # Every row belongs to the album named above the table, so its column makes room for the others.
+            columns = (("#", 46), *(c for c in columns if c[0] != "专辑"))
         if columns != self.columns_shown:
             self.columns_shown = columns
             self.tree.configure(columns=tuple(str(i) for i in range(len(columns))))
             for i, (name, width) in enumerate(columns):
-                side = "center" if name == "#" else "w"
+                side = "center" if name in ("#", "播放") else "w"
                 self.tree.heading(str(i), text=name, anchor=side)
                 self.tree.column(str(i), width=self.px(width), minwidth=self.px(136 if name == "传输格式" else 40),
-                                 stretch=name not in ("时长", "#"), anchor=side)
+                                 stretch=name not in ("时长", "#", "评级", "播放"), anchor=side)
         self.tree.delete(*self.tree.get_children())
         self.empty.place_forget()
         query = self.search.get().strip().casefold()
@@ -731,12 +749,16 @@ class App:
                 ordered = ((by_id[e.track_id], e.entry_id) for e in playlist.entries if e.track_id in by_id)
             else:
                 ordered = ((t, None) for t in tracks)
-            data = [(t, (t.title, t.artist, t.album, f"{t.length_ms // 60000}:{t.length_ms // 1000 % 60:02}"), entry)
+            def heard(track):
+                rating, plays = self.listening.get(track.track_id, (track.rating, track.play_count))
+                return "★" * (rating // 20) + ("½" if rating % 20 >= 10 else ""), plays or ""
+            data = [(t, (t.title, t.artist, t.album, *heard(t), f"{t.length_ms // 60000}:{t.length_ms // 1000 % 60:02}"), entry)
                     for t, entry in ordered]
         self.heading.configure(text=heading)
         count = len(data)
         if query:
-            data = [row for row in data if any(query in str(x).casefold() for x in row[1])
+            # Text and the last column only: a digit typed into the search should not match play counts.
+            data = [row for row in data if any(query in str(x).casefold() for x in row[1][:3] + row[1][-1:])
                     or (queue_view and query in str(row[0]).casefold())]
         browsing = bool(snap) and not queue_view
         for mode, button in self.browse_buttons.items():
@@ -753,7 +775,8 @@ class App:
                 disc, number = row[0].metadata.disc_number, row[0].track_number
                 return (disc or 1) if len(discs) > 1 else 0, number or 1 << 30
             data = [(row[0], ((f"{place(row)[0]}-{row[0].track_number}" if len(discs) > 1 else row[0].track_number)
-                              if row[0].track_number else "", *row[1]), row[2]) for row in sorted(data, key=place)]
+                              if row[0].track_number else "", *row[1][:2], *row[1][3:]), row[2])
+                    for row in sorted(data, key=place)]
             self.group_pane.grid()
             self.flow.grid()
         elif browsing and data:
@@ -1193,16 +1216,15 @@ class App:
             return
         self.latest_update = found
         self._offer_update()
-        self.status.set(f"发现新版本 {found.version} · 点右下角查看")
+        self.status.set(f"发现新版本 {found.version} · 点右下角的版本号查看")
         if asked:
-            self.open_update()
+            self.open_versions()
 
     def _offer_update(self):
         if self.latest_update:
-            self.update_button.configure(text=f"新版本 {self.latest_update.version}")
-            self.update_button.pack(side="right", fill="y")
+            self.update_dot.pack(side="left", padx=self.px(3, 0))
         else:
-            self.update_button.pack_forget()
+            self.update_dot.pack_forget()
 
     def _can_update_now(self):
         """Installing closes the program, so it waits for work in progress and for songs still queued."""
@@ -1215,13 +1237,13 @@ class App:
             return False
         return True
 
-    def open_update(self):
-        info = self.latest_update
-        if not info or (self.update_dialog and self.update_dialog.winfo_exists()) or not self._can_update_now():
+    def open_versions(self):
+        """Show what each release changed, and offer the newer one when there is one."""
+        if self.update_dialog and self.update_dialog.winfo_exists():
             return
         px = self.px
         dialog = self.update_dialog = tk.Toplevel(self.window)
-        dialog.title("自动更新")
+        dialog.title("版本与更新")
         dialog.configure(bg=theme.SURFACE)
         dialog.resizable(False, False)
         dialog.transient(self.window)
@@ -1229,50 +1251,102 @@ class App:
         self.window.after(60, theme.title_bar, dialog)
         frame = tk.Frame(dialog, bg=theme.SURFACE, padx=px(22), pady=px(20))
         frame.pack(fill="both", expand=True)
-        tk.Label(frame, text=f"发现新版本 {info.version}", bg=theme.SURFACE, fg=theme.NAVY,
+        tk.Label(frame, text="ClassicDrop " + __version__, bg=theme.SURFACE, fg=theme.NAVY,
                  font=(theme.FONT, 14, "bold")).pack(anchor="w")
-        tk.Label(frame, text=f"当前版本 {__version__}", bg=theme.SURFACE, fg=theme.MUTED,
-                 font=(theme.FONT, 9)).pack(anchor="w", pady=px(2, 0))
-        if info.notes.strip():
-            box = tk.Frame(frame, bg=theme.LINE, padx=1, pady=1)
-            box.pack(fill="x", pady=px(12, 0))
-            notes = tk.Text(box, wrap="word", height=9, width=54, font=(theme.FONT, 10), bg=theme.BAR, fg=theme.NAVY,
-                            relief="flat", highlightthickness=0, padx=px(10), pady=px(8))
-            scroll = ttk.Scrollbar(box, orient="vertical", command=notes.yview)
-            notes.configure(yscrollcommand=scroll.set)
-            notes.pack(side="left", fill="both", expand=True)
-            scroll.pack(side="right", fill="y")
-            notes.insert("1.0", info.notes.strip())
-            notes.configure(state="disabled")
-        link = tk.Label(frame, text="查看发布页并手动下载", bg=theme.SURFACE, fg=theme.BLUE, cursor="hand2",
-                        font=(theme.FONT, 10, "underline"))
-        link.pack(anchor="w", pady=px(14, 0))
-        link.bind("<Button-1>", lambda _: webbrowser.open(info.url, new=2))
-        automatic = bool(info.download_url)
-        tk.Label(frame, text="是否下载并自动安装？安装完成后会重新打开 ClassicDrop。" if automatic
-                 else "这个版本没有可自动安装的安装包，请到发布页下载。", bg=theme.SURFACE, fg=theme.NAVY).pack(
-            anchor="w", pady=px(14, 0))
-        buttons = tk.Frame(frame, bg=theme.SURFACE)
-        buttons.pack(anchor="e", pady=px(12, 0))
-        def close():
-            dialog.destroy()
-            self.update_dialog = None
-        def accept():
-            close()
-            if automatic:
-                self.download_update()
-            else:
-                webbrowser.open(info.url, new=2)
-        ttk.Button(buttons, text="否" if automatic else "关闭", command=close).pack(side="left", padx=px(0, 8))
-        yes = ttk.Button(buttons, text="是" if automatic else "打开发布页", style="Accent.TButton", command=accept)
-        yes.pack(side="left")
-        yes.bind("<Return>", lambda _: accept())
-        yes.focus_set()
-        dialog.protocol("WM_DELETE_WINDOW", close)
-        dialog.bind("<Escape>", lambda _: close())
+        self.version_state = tk.Label(frame, bg=theme.SURFACE, font=(theme.FONT, 9))
+        self.version_state.pack(anchor="w", pady=px(2, 0))
+        box = tk.Frame(frame, bg=theme.LINE, padx=1, pady=1)
+        box.pack(fill="both", expand=True, pady=px(12, 0))
+        notes = self.version_notes = tk.Text(box, wrap="char", height=17, width=58, font=(theme.FONT, 10), bg=theme.BAR,
+                                             fg=theme.NAVY, relief="flat", highlightthickness=0, padx=px(12), pady=px(6),
+                                             cursor="arrow", spacing1=px(1), spacing3=px(1))
+        scroll = ttk.Scrollbar(box, orient="vertical", command=notes.yview)
+        notes.configure(yscrollcommand=scroll.set)
+        notes.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        notes.tag_configure("version", font=(theme.FONT, 11, "bold"), spacing1=px(9))
+        notes.tag_configure("date", foreground=theme.MUTED, font=(theme.FONT, 9))
+        notes.tag_configure("new", foreground=theme.ALERT, font=(theme.FONT, 9, "bold"))
+        notes.tag_configure("quiet", foreground=theme.MUTED)
+        foot = tk.Frame(frame, bg=theme.SURFACE)
+        foot.pack(fill="x", pady=px(14, 0))
+        everything = tk.Label(foot, text="在 GitHub 上查看全部版本", bg=theme.SURFACE, fg=theme.BLUE, cursor="hand2",
+                              font=(theme.FONT, 10, "underline"))
+        everything.pack(side="left")
+        everything.bind("<Button-1>", lambda _: webbrowser.open(PROJECT_URL + "/releases", new=2))
+        self.version_buttons = tk.Frame(foot, bg=theme.SURFACE)
+        self.version_buttons.pack(side="right")
+        dialog.protocol("WM_DELETE_WINDOW", self.close_versions)
+        dialog.bind("<Escape>", lambda _: self.close_versions())
+        self._show_versions((), "正在读取更新记录…", checked=False)
         dialog.update_idletasks()
         dialog.geometry(f"+{self.window.winfo_rootx() + (self.window.winfo_width() - dialog.winfo_width()) // 2}"
                         f"+{self.window.winfo_rooty() + (self.window.winfo_height() - dialog.winfo_height()) // 2}")
+        self.history_stamp += 1
+        stamp = self.history_stamp
+        def worker():
+            try:
+                found = release_history(__version__)
+            except Exception as exc:
+                found = exc
+            self.events.put(("history", (stamp, found)))
+        Thread(target=worker, daemon=True).start()
+
+    def close_versions(self):
+        if self.update_dialog and self.update_dialog.winfo_exists():
+            self.update_dialog.destroy()
+        self.update_dialog = None
+
+    def _history_arrived(self, stamp, found):
+        if stamp != self.history_stamp or not (self.update_dialog and self.update_dialog.winfo_exists()):
+            return
+        if isinstance(found, Exception):
+            self._show_versions((), f"无法读取更新记录：{found}", checked=False)
+            return
+        releases, update = found
+        if update:
+            self.latest_update = update
+            self._offer_update()
+        self._show_versions(releases, "" if releases else "还没有发布记录。", checked=True)
+
+    def _show_versions(self, releases, remark, *, checked):
+        """Fill the open dialog. checked is True once GitHub has answered."""
+        info = self.latest_update
+        listed = list(releases)
+        if info and all(version_key(r.version) != version_key(info.version) for r in listed):
+            # Known from the check at start, even when the full list cannot be read now.
+            listed.insert(0, Release(info.version, info.url, "", plain_notes(info.notes)))
+        notes = self.version_notes
+        font = tkfont.Font(font=notes["font"])
+        room = (int(notes["width"]) - 1) * font.measure("0")  # the box is that many digits wide
+        notes.configure(state="normal")
+        notes.delete("1.0", "end")
+        for release in listed:
+            notes.insert("end", release.version, "version")
+            if release.published:
+                notes.insert("end", "   " + release.published, "date")
+            if info and version_key(release.version) == version_key(info.version):
+                notes.insert("end", "   新版本", "new")
+            elif version_key(release.version) == version_key(__version__):
+                notes.insert("end", "   当前版本", "date")
+            notes.insert("end", "\n" + theme.wrap_lines(release.notes or "（没有更新说明）", font.measure, room) + "\n")
+        if remark:
+            notes.insert("end", ("\n" if listed else "") + remark, "quiet")
+        notes.configure(state="disabled")
+        self.version_state.configure(text=f"发现新版本 {info.version}" if info else "已是最新版本" if checked else "",
+                                     fg=theme.ALERT if info else theme.MUTED)
+        for button in self.version_buttons.winfo_children():
+            button.destroy()
+        ttk.Button(self.version_buttons, text="关闭", command=self.close_versions).pack(side="left")
+        if info:
+            def accept():
+                self.close_versions()
+                if info.download_url:
+                    self.download_update()
+                else:
+                    webbrowser.open(info.url, new=2)
+            ttk.Button(self.version_buttons, text=f"下载并安装 {info.version}" if info.download_url else "打开发布页",
+                       style="Accent.TButton", command=accept).pack(side="left", padx=self.px(8, 0))
 
     def download_update(self):
         info = self.latest_update

@@ -68,7 +68,9 @@ class BrowseTests(unittest.TestCase):
         self.window.update()
 
     def titles(self):
-        return [self.ui.tree.item(i, "values")[-4] for i in self.ui.tree.get_children()]
+        tree = self.ui.tree
+        column = [tree.heading(c, "text") for c in tree["columns"]].index("歌名")
+        return [tree.item(i, "values")[column] for i in tree.get_children()]
 
     def flow(self):
         return [item[0] for item in self.ui.flow.items], self.ui.flow.items[self.ui.flow.target][0]
@@ -265,7 +267,7 @@ class BrowseTests(unittest.TestCase):
             transfer(device, [], self.site / "backup", desired=replace(snapshot, tracks=tracks))
             ui.load(self.root)
             self.settle()
-        self.assertEqual((ui.tree["columns"], numbers()), (("0", "1", "2", "3"), ["一", "二", "三"]))
+        self.assertEqual((ui.tree["columns"], numbers()), (("0", "1", "2", "3", "4", "5"), ["一", "二", "三"]))
         renumber({"一": (1, 2), "二": (1, 1), "三": (0, 0)})
         self.assertEqual(self.titles(), ["一", "二", "三"])
         ui.set_browse("album")

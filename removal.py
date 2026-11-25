@@ -12,7 +12,34 @@ from pathlib import Path
 from iPodDB.sidecars import (MAX_SIDECAR_BYTES, genius_playlist_number, is_playback_sidecar,
                              parse_itunes_stats, parse_play_counts_plist, remap_genius_playlist,
                              remap_playback_sidecar)
+from iPodDB.SQLiteDB.genius import GeniusData, GeniusDatabase, parse_genius_database, serialize_genius_database
 from library import DB, MUSIC, MUSIC_SUFFIXES, STAGE, fingerprint, inside, write_file
+
+GENIUS = "Extras.itdb"
+MAX_GENIUS = 128 * 1024 * 1024
+
+
+def genius_source(device, removed):
+    """What the engine needs to delete songs that iTunes gave Genius identities.
+
+    Returns the Genius database to hand to the engine and the bytes now on the iPod, or (None, None) when no
+    removed song has such an identity. The engine drops the removed songs from the database, which is then
+    published with the library. An iPod without the file has nothing to drop, so the engine is given an
+    empty database and its output is not written.
+    """
+    if not any(t.ipod and t.ipod.genius_id for t in device.library.snapshot.tracks if t.track_id in removed):
+        return None, None
+    path = inside(device.root, "iPod_Control/iTunes/" + GENIUS)
+    if not path.exists():
+        return serialize_genius_database(GeniusDatabase(GeniusData())), None
+    if not path.is_file() or path.stat().st_size > MAX_GENIUS:
+        raise ValueError("iPod 上的 Genius 数据（Extras.itdb）无法读取，已停止删除。")
+    data = path.read_bytes()
+    try:
+        parse_genius_database(data)
+    except Exception as error:
+        raise ValueError(f"iPod 上的 Genius 数据（Extras.itdb）已损坏，已停止删除。\n{error}") from error
+    return data, data
 
 
 def _digest(data):
@@ -73,7 +100,8 @@ def _file_stamp(path):
     return [stat.st_size, stat.st_mtime_ns]
 
 
-def removal_receipt(device, desired, after_hash, report):
+def removal_receipt(device, desired, after_hash, report, genius=None):
+    """genius is the Genius database before and after the removal, when the iPod keeps one that changes."""
     before, after = device.library.snapshot.tracks, desired.tracks
     old_ids, new_ids = tuple(t.track_id for t in before), tuple(t.track_id for t in after)
     keep = set(new_ids)
@@ -106,6 +134,11 @@ def removal_receipt(device, desired, after_hash, report):
             new = base64.b64encode(result).decode("ascii")
         readonly = bool(path.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY)
         updates[name] = [_digest(data), new, readonly]
+    if genius is not None:
+        old, new = genius
+        path = inside(device.root, "iPod_Control/iTunes/" + GENIUS)
+        readonly = bool(path.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY)
+        updates[GENIUS] = [_digest(old), "same" if new == old else base64.b64encode(new).decode("ascii"), readonly]
     report(f"已核对 {len(media)} 个独立音频文件。")
     return dict(before=device.version, after=after_hash, guid=device.guid.hex(),
                 media=list(media.values()), sidecars=updates)
@@ -123,7 +156,9 @@ def quarantine(device, receipt, report):
             report(f"准备删除 {i + 1}/{count} · {path.name}")
         path.rename(slots / str(i))
     files = _sidecars(device)
-    if (files.keys() != receipt["sidecars"].keys() or
+    if GENIUS in receipt["sidecars"]:
+        files[GENIUS] = inside(device.root, "iPod_Control/iTunes/" + GENIUS)
+    if (files.keys() != receipt["sidecars"].keys() or any(not path.is_file() for path in files.values()) or
             any(fingerprint(path) != receipt["sidecars"][name][0] for name, path in files.items())):
         raise ValueError("设备上的播放记录已变化，请刷新后重试。")
 

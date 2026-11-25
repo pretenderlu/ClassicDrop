@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 from version import __version__
 
 REPOSITORY = "pretenderlu/ClassicDrop"
+PROJECT_URL = "https://github.com/" + REPOSITORY
 INSTALLER = re.compile(r"ClassicDropSetup-[\w.\-]+\.exe")
 
 
@@ -36,6 +37,25 @@ class UpdateInfo:
     notes: str = ""
 
 
+@dataclass(frozen=True)
+class Release:
+    version: str
+    url: str
+    published: str  # the day it was published, as YYYY-MM-DD, when known
+    notes: str
+
+
+def plain_notes(markdown):
+    """Release notes for a plain text box: Markdown marks are dropped, links keep their text."""
+    lines = []
+    for line in markdown.replace("\r\n", "\n").split("\n"):
+        line = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", line)
+        line = re.sub(r"\*\*|__|`", "", line)
+        heading = re.match(r"#{1,6}\s+(.*)", line)
+        lines.append(heading[1] if heading else re.sub(r"^(\s*)[-*]\s+", r"\1· ", line))
+    return "\n".join(lines).strip()
+
+
 def version_key(value):
     numbers = []
     for part in value.strip().lstrip("vV").split("-", 1)[0].split("."):
@@ -54,7 +74,24 @@ def _open(url, accept, timeout):
 def check_for_updates(current_version=__version__, repository=REPOSITORY, timeout=10):
     """The newest published release if it is newer than current_version, otherwise None."""
     with _open(f"https://api.github.com/repos/{repository}/releases/latest", "application/vnd.github+json", timeout) as reply:
+        return _update_info(json.load(reply), current_version)
+
+
+def release_history(current_version=__version__, repository=REPOSITORY, timeout=10):
+    """Published releases, newest first, and the update the newest offers over current_version, if any."""
+    with _open(f"https://api.github.com/repos/{repository}/releases?per_page=30", "application/vnd.github+json", timeout) as reply:
         payload = json.load(reply)
+    if not isinstance(payload, list):
+        raise UpdateError("GitHub 返回的更新记录无法识别。")
+    published = sorted((r for r in payload if isinstance(r, dict) and not r.get("draft") and not r.get("prerelease")
+                        and r.get("tag_name") and str(r.get("html_url", "")).startswith("https://github.com/")),
+                       key=lambda r: version_key(str(r["tag_name"])), reverse=True)
+    releases = tuple(Release(str(r["tag_name"]), str(r["html_url"]), str(r.get("published_at") or "")[:10],
+                             plain_notes(str(r.get("body") or ""))) for r in published)
+    return releases, (_update_info(published[0], current_version) if published else None)
+
+
+def _update_info(payload, current_version):
     if not isinstance(payload, dict) or payload.get("draft") or payload.get("prerelease"):
         return None
     tag, url = str(payload.get("tag_name", "")), str(payload.get("html_url", ""))

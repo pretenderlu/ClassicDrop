@@ -12,7 +12,7 @@ from urllib.error import HTTPError, URLError
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 import updates
-from updates import UpdateError, UpdateInfo, check_for_updates, download_update, version_key
+from updates import UpdateError, UpdateInfo, check_for_updates, download_update, plain_notes, release_history, version_key
 from version import __version__
 DIGEST = "a" * 64
 
@@ -79,6 +79,33 @@ class CheckTests(unittest.TestCase):
         del payload["body"]
         with latest(payload):
             self.assertEqual(check_for_updates("1.5.1").notes, "")
+
+
+class HistoryTests(unittest.TestCase):
+    def test_published_releases_newest_first_with_readable_notes(self):
+        older = release("v1.5.1", published_at="2026-11-22T12:27:38Z",
+                        body="## 下载\r\n\r\n- **`a.exe`**：见 [Issues](https://x.invalid/i)。\r\n")
+        newest = release("v9.9.9", published_at="2026-12-01T08:00:00Z")
+        payload = [older, release("v9.9.10", draft=True), newest, release("v10.0.0", prerelease=True),
+                   release("v0.9", html_url="https://example.invalid/phish"), "unexpected", release("", body="no tag")]
+        with latest(payload) as opened:
+            releases, update = release_history("1.5.1")
+        self.assertEqual(opened.call_args.args[0].full_url,
+                         "https://api.github.com/repos/pretenderlu/ClassicDrop/releases?per_page=30")
+        self.assertEqual([(r.version, r.published, r.notes) for r in releases],
+                         [("v9.9.9", "2026-12-01", "· 修复若干问题"), ("v1.5.1", "2026-11-22", "下载\n\n· a.exe：见 Issues。")])
+        self.assertTrue(all(r.url.startswith("https://github.com/") for r in releases))
+        self.assertEqual((update.version, update.installer_name, update.sha256), ("v9.9.9", "ClassicDropSetup-v9.9.9.exe", DIGEST))
+        with latest(payload):
+            self.assertIsNone(release_history("9.9.9")[1])
+        with latest([]):
+            self.assertEqual(release_history("1.5.1"), ((), None))
+        with latest({"message": "API rate limit exceeded"}), self.assertRaisesRegex(UpdateError, "无法识别"):
+            release_history("1.5.1")
+
+    def test_plain_notes(self):
+        self.assertEqual(plain_notes("# 标题\n\n* 一\n  - 二\n__粗__ 与 `码`\n"), "标题\n\n· 一\n  · 二\n粗 与 码")
+        self.assertEqual(plain_notes("  \n"), "")
 
 
 class DownloadTests(unittest.TestCase):
