@@ -83,6 +83,9 @@ class ImportDialog(tk.Toplevel):
         y = max(0, min(parent.winfo_rooty() + (parent.winfo_height() - height) // 2, self.winfo_screenheight() - height - 40))
         self.geometry(f"{width}x{height}+{x}+{y}")
         self.deiconify()
+        if system.MAC:
+            # The parent's "-disabled" modality does not exist on macOS; take the grab instead.
+            self.grab_set()
         theme.title_bar(self)
         (self.playlist_entry if self.creating_playlist else self.tree).focus_set()
         if paths:

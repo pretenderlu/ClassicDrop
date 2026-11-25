@@ -390,9 +390,10 @@ def _convert(source, mode, destination):
     if encoders.afconvert():
         if mode == "aac":
             af_args, pcm = (["-f", "m4af", "-d", "aac", "-b", "256000" if channels == 2 else "128000",
-                             "-s", "2", "-q", "127"], "pcm_f32le")
+                             "-c", str(channels), "-s", "2", "-q", "127"], "pcm_f32le")
         else:
-            af_args, pcm = ["-f", "m4af", "-d", "alac"], "pcm_s24le" if bits == 24 else "pcm_s16le"
+            af_args = ["-f", "m4af", "-d", "alac", "-c", str(channels)]
+            pcm = "pcm_s24le" if bits == 24 else "pcm_s16le"
         try:
             encoders.afconvert_encode(af_args, decode, pcm, destination)
             _unstamp(destination)
