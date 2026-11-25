@@ -54,14 +54,21 @@ done
 
 APP="$ROOT/dist/ClassicDrop.app"
 PLIST="$APP/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier io.github.pretenderlu.classicdrop" "$PLIST"
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$PLIST"
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$PLIST"
-/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName ClassicDrop" "$PLIST"
-/usr/libexec/PlistBuddy -c "Add :NSHighResolutionCapable bool true" "$PLIST" 2>/dev/null || \
-    /usr/libexec/PlistBuddy -c "Set :NSHighResolutionCapable true" "$PLIST"
-/usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string 12.0" "$PLIST" 2>/dev/null || \
-    /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion 12.0" "$PLIST"
+"$PYTHON" - "$PLIST" "$VERSION" <<'PY'
+import plistlib, sys
+path, version = sys.argv[1], sys.argv[2]
+with open(path, "rb") as f:
+    info = plistlib.load(f)
+volumes = "ClassicDrop 需要读写 iPod 上的曲库和歌曲。"
+folders = "用于选择要传入 iPod 的音乐文件。"
+info.update(CFBundleIdentifier="io.github.pretenderlu.classicdrop", CFBundleShortVersionString=version,
+            CFBundleVersion=version, CFBundleDisplayName="ClassicDrop", NSHighResolutionCapable=True,
+            LSMinimumSystemVersion="12.0", NSRemovableVolumesUsageDescription=volumes,
+            NSDocumentsFolderUsageDescription=folders, NSDownloadsFolderUsageDescription=folders,
+            NSDesktopFolderUsageDescription=folders)
+with open(path, "wb") as f:
+    plistlib.dump(info, f)
+PY
 
 # Ad-hoc signature only; the DMG still needs the Gatekeeper workaround in README.
 codesign --force --deep --sign - "$APP"
