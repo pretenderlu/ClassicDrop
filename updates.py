@@ -13,6 +13,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from version import __version__
+import winarch
 
 REPOSITORY = "pretenderlu/ClassicDrop"
 PROJECT_URL = "https://github.com/" + REPOSITORY
@@ -21,7 +22,7 @@ PROJECT_URL = "https://github.com/" + REPOSITORY
 def environment_lines(device=""):
     """Version, Windows build and iPod model; nothing that identifies the user. Shared with the feedback report."""
     return [f"- ClassicDrop：v{__version__}", f"- 系统：Windows {platform.release()}（{platform.version()}）",
-            f"- iPod：{device or '未连接'}"]
+            f"- 架构：{winarch.describe()}", f"- iPod：{device or '未连接'}"]
 
 
 def issue_url(device=""):

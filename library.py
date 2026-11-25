@@ -17,6 +17,9 @@ from xml.parsers.expat import ExpatError
 from device_identity import identify
 from audio_convert import lossless_profile, needs_48k_alac, source_audio, source_tags, tag_text
 
+import winarch
+winarch.import_wasmtime()  # under ARM64 emulation platform.machine() reports the host, not the x64 process
+
 from iPodDB.iTunesDB.writer.signature import verify_hash58
 from iPodDB.library.genius import reconcile_genius_playlists
 from iPodDB.sidecars import MAX_SIDECAR_BYTES, PlaybackSidecar

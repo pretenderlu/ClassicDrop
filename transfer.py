@@ -14,6 +14,8 @@ from dataclasses import replace
 from pathlib import Path
 
 from audio_convert import prepared_files
+import winarch
+winarch.import_wasmtime()
 from iPodDB.library import WriteResources
 from library import (DB, MUSIC, STAGE, delete_playlist, fingerprint, inside, is_music, playlist_edit, prepared_database,
                      select_additions, validate_playlist_name, without_music, write_file)

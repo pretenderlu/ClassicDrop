@@ -35,6 +35,7 @@ from native_covers import device_covers, load_cover
 from transfer import STAGE, export_tracks, recover_interrupted, transfer
 from updates import PROJECT_URL, Release, check_for_updates, download_update, issue_url, plain_notes, release_history, version_key
 from version import __version__
+import winarch
 
 BACKUPS = Path(os.environ["LOCALAPPDATA"]) / "ClassicDrop" / "Backups"
 SETTINGS = BACKUPS.with_name("settings.json")
@@ -1758,9 +1759,13 @@ class App:
 
 
 def main():
+    if sys.argv[1:2] == ["--self-test"]:
+        from selftest import self_test
+        sys.exit(self_test(Path(sys.argv[2])))
     ctypes.windll.user32.SetProcessDPIAware()
     diagnostics.setup()
-    diagnostics.log.info("ClassicDrop %s 启动 · Windows %s（%s）", __version__, platform.release(), platform.version())
+    diagnostics.log.info("ClassicDrop %s 启动 · Windows %s（%s） · 架构 %s",
+                         __version__, platform.release(), platform.version(), winarch.describe())
     window = TkinterDnD.Tk()
     app = App(window, browse="album", settings=SETTINGS, check_updates=True)
     paths = [Path(value) for value in sys.argv[1:]]

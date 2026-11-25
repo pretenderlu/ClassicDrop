@@ -71,8 +71,46 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  draft-release:
+      - name: Run bundled self-test
+        # 打包好的程序先自检一遍：签名、FFmpeg、refalac、tkdnd 全部通过才继续。
+        shell: pwsh
+        run: |
+          $json = "$env:RUNNER_TEMP\self-test.json"
+          $p = Start-Process -PassThru -FilePath "dist\ClassicDrop\ClassicDrop.exe" -ArgumentList "--self-test", $json
+          if (-not $p.WaitForExit(120000)) { $p.Kill(); throw "self-test timed out" }
+          Get-Content $json
+          if ($p.ExitCode -ne 0) { exit 1 }
+
+  arm64-smoke:
+    # 在 ARM64 runner 上验证 x64 包能在模拟环境下正常启动（wasmtime 等原生组件）。
     needs: [windows]
+    runs-on: windows-11-arm
+    timeout-minutes: 10
+    steps:
+      - name: Download Windows packages
+        uses: actions/download-artifact@v8
+        with:
+          name: ClassicDrop-Windows
+
+      - name: Expand portable ZIP
+        shell: pwsh
+        run: Expand-Archive -LiteralPath ClassicDrop-Windows-x64.zip -DestinationPath app
+
+      - name: Run bundled self-test under emulation
+        # 限时等待，避免 PyInstaller 的崩溃对话框把任务挂住。
+        shell: pwsh
+        run: |
+          $json = "$env:RUNNER_TEMP\self-test.json"
+          $p = Start-Process -PassThru -FilePath "$PWD\app\ClassicDrop\ClassicDrop.exe" -ArgumentList "--self-test", $json
+          if (-not $p.WaitForExit(120000)) { $p.Kill(); throw "self-test timed out" }
+          Get-Content $json
+          $report = Get-Content $json -Raw | ConvertFrom-Json
+          if ($p.ExitCode -ne 0 -or -not $report.ok) { exit 1 }
+          if ($report.host_arch -ne "ARM64" -or $report.process_arch -ne "x64") { exit 1 }
+          if ($report.wasmtime_dll -notmatch "win32-x86_64") { exit 1 }
+
+  draft-release:
+    needs: [windows, arm64-smoke]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:

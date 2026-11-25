@@ -1,10 +1,10 @@
-# ClassicDrop 1.5.9
+# ClassicDrop 1.5.10
 
-Windows x64 下的 iPod classic 原厂曲库工具。面向已经有原厂曲库的 IPC3（2009 年末 160 GB 薄款）。所有日常操作都在本地完成。iPod nano 第 3、4 代使用同一种曲库，也可以读写，但还没有在真机上验证过，见「支持的机型」。
+Windows x64 下的 iPod classic 原厂曲库工具。面向已经有原厂曲库的 IPC3（2009 年末 160 GB 薄款）。所有日常操作都在本地完成。iPod nano 第 3、4 代使用同一种曲库，也可以读写，但还没有在真机上验证过，见「支持的机型」。支持 Windows 10/11 x64；在 Windows 11 ARM64 电脑上以模拟方式运行 x64 版（Windows 10 ARM64 不能运行 x64 程序，不支持）。
 
 ## 安装与更新
 
-从 [Releases](https://github.com/pretenderlu/ClassicDrop/releases) 下载 `ClassicDropSetup-v1.5.9.exe` 并运行。程序装在 `%LOCALAPPDATA%\Programs\ClassicDrop`，安装和卸载都不需要管理员权限。同一页面的 `ClassicDrop-Windows-x64.zip` 是免安装版，解压后运行其中的 ClassicDrop.exe。
+从 [Releases](https://github.com/pretenderlu/ClassicDrop/releases) 下载 `ClassicDropSetup-v1.5.10.exe` 并运行。程序装在 `%LOCALAPPDATA%\Programs\ClassicDrop`，安装和卸载都不需要管理员权限。同一页面的 `ClassicDrop-Windows-x64.zip` 是免安装版，解压后运行其中的 ClassicDrop.exe。
 
 启动后程序会向 GitHub 查询最新的正式版本。窗口右下角有 GitHub 链接、「反馈」和当前版本号。点「反馈」会打开一个小窗口，列出诊断信息（软件版本、Windows 版本、iPod 机型、最近一次报错和最近的运行日志）供先过目，再复制到剪贴板并打开 GitHub 的新建 Issue 页面。运行日志存在 `%LOCALAPPDATA%\ClassicDrop\Logs`，最多 3 个文件、每个 1 MB，会自动轮替。日志里会记录歌曲文件名；设备序列号、FireWire GUID 和设备名称一律不写入，写日志和诊断信息前会被替换成「[已隐藏]」，你的用户文件夹显示为 `~`。点版本号可以查看各个版本的更新记录。有新版本时，版本号旁边会出现一个红点，更新记录里会多出「下载并安装」按钮。点它之后程序下载安装包，核对 GitHub 提供的 SHA-256 校验值，再自动安装并重新打开。正在传歌，或待传列表里还有歌曲时，需要先处理完再更新。也可以随时点「工具与备份 → 检查更新」。下载失败时可以重试，或打开发布页手动下载。查询只访问 GitHub 的发布接口，不上传任何曲库或设备信息。
 
@@ -108,7 +108,7 @@ py -3.12 -m venv .venv
 & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer\ClassicDrop.iss
 ```
 
-版本号只写在 `version.py`。推送与它一致的 `v*` 标签后，GitHub Actions 会运行测试、打包，并创建草稿 Release。核对附件、写好更新说明并手动发布后，已安装的程序才会收到更新提示。
+版本号只写在 `version.py`。推送与它一致的 `v*` 标签后，GitHub Actions 会运行测试、打包，并创建草稿 Release。核对附件、写好更新说明并手动发布后，已安装的程序才会收到更新提示。构建产物可以跑 `dist\ClassicDrop\ClassicDrop.exe --self-test 报告.json` 自检：校验 wasmtime、HASH58/HASHAB 签名、FFmpeg、refalac 和 tkdnd，全部通过才返回 0。
 
 本项目使用 GPL-3.0-or-later。曲库读写、设备校验和索引处理复用 [iOpenPod](https://github.com/TheRealSavi/iOpenPod/tree/5e48bd7b6ea0903a1ffc5f7a44c02bacac5496d0) 的 iPodDB 和 device_registry，源码随附于 vendor，版权归属见 vendor/COPYING.md。音频标签使用 [Mutagen](https://github.com/quodlibet/mutagen)，文件拖放使用 [tkinterdnd2](https://github.com/Eliav2/tkinterdnd2)。测试音频为本项目生成的短正弦波。
 

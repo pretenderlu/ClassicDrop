@@ -10,6 +10,8 @@ from pathlib import Path
 from PIL import Image
 from mutagen import MutagenError
 from device_registry import DEFAULT_DEVICE_REGISTRY
+import winarch
+winarch.import_wasmtime()
 from iPodDB.ArtworkDB.parser.parse_ArtworkDB import parse_ArtworkDB
 from iPodDB.ArtworkDB.shared.chunk_defs.mhif import MhifHeader
 from iPodDB.library import (ArtworkAsset, ArtworkPixels, CoverFormat, CoverPixelFormat, FileDependency, SourceFile,

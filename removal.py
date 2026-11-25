@@ -9,6 +9,8 @@ import re
 import stat
 from pathlib import Path
 
+import winarch
+winarch.import_wasmtime()
 from iPodDB.sidecars import (MAX_SIDECAR_BYTES, genius_playlist_number, is_playback_sidecar,
                              parse_itunes_stats, parse_play_counts_plist, remap_genius_playlist,
                              remap_playback_sidecar)

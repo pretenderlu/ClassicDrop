@@ -23,6 +23,7 @@ $argsList = @(
     "--add-data", ((Join-Path $projectPath "ClassicDrop.ico") + ";."),
     "--add-data", ((Join-Path $projectPath "LICENSE") + ";licenses"),
     "--add-data", ((Join-Path $projectPath "vendor/COPYING.md") + ";licenses"),
+    "--add-data", ((Join-Path $projectPath "vendor/iPodDB/iTunesDB/writer/calcHashAB.wasm.b64") + ";iPodDB/iTunesDB/writer"),
     "--add-binary", ($encoder + ";imageio_ffmpeg/binaries"), "--hidden-import", "imageio_ffmpeg.binaries",
     "--add-binary", ((Join-Path $qaac "qaac64.exe") + ";qaac"),
     "--add-binary", ((Join-Path $qaac "refalac64.exe") + ";qaac"),

@@ -8,7 +8,9 @@ import hashlib
 import hmac
 import importlib.resources
 import math
+import sys
 from base64 import b64decode
+from pathlib import Path
 from dataclasses import dataclass
 from functools import cache
 from typing import Protocol, cast
@@ -191,11 +193,15 @@ def verify_hash72(
 
 @cache
 def _hashab_module() -> tuple[wasmtime.Engine, wasmtime.Module]:
-    encoded = importlib.resources.files("iPodDB.iTunesDB.writer").joinpath(
-        "calcHashAB.wasm.b64"
-    )
+    try:
+        encoded = importlib.resources.files("iPodDB.iTunesDB.writer").joinpath(
+            "calcHashAB.wasm.b64"
+        ).read_bytes()
+    except OSError:
+        # Frozen builds keep data files next to the executable, not in the archive.
+        encoded = (Path(sys._MEIPASS) / "iPodDB/iTunesDB/writer/calcHashAB.wasm.b64").read_bytes()
     engine = wasmtime.Engine()
-    module = wasmtime.Module(engine, b64decode(encoded.read_bytes()))
+    module = wasmtime.Module(engine, b64decode(encoded))
     return engine, module
 
 
