@@ -13,7 +13,8 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from version import __version__
-import winarch
+import cpuarch
+import system
 
 REPOSITORY = "pretenderlu/ClassicDrop"
 PROJECT_URL = "https://github.com/" + REPOSITORY
@@ -21,8 +22,9 @@ PROJECT_URL = "https://github.com/" + REPOSITORY
 
 def environment_lines(device=""):
     """Version, Windows build and iPod model; nothing that identifies the user. Shared with the feedback report."""
-    return [f"- ClassicDrop：v{__version__}", f"- 系统：Windows {platform.release()}（{platform.version()}）",
-            f"- 架构：{winarch.describe()}", f"- iPod：{device or '未连接'}"]
+    os_name = f"macOS {platform.mac_ver()[0]}" if system.MAC else f"Windows {platform.release()}（{platform.version()}）"
+    return [f"- ClassicDrop：v{__version__}", f"- 系统：{os_name}",
+            f"- 架构：{cpuarch.describe()}", f"- iPod：{device or '未连接'}"]
 
 
 def issue_url(device=""):
@@ -115,7 +117,8 @@ def _update_info(payload, current_version):
     tag, url = str(payload.get("tag_name", "")), str(payload.get("html_url", ""))
     if not tag or not url.startswith("https://github.com/") or version_key(tag) <= version_key(current_version):
         return None
-    installer = next((asset for asset in payload.get("assets") or []
+    # The Windows installer is never offered on macOS; the Mac update flow is not built yet.
+    installer = {} if system.MAC else next((asset for asset in payload.get("assets") or []
                       if INSTALLER.fullmatch(str(asset.get("name", "")))), {})
     digest = str(installer.get("digest", "") or "")
     # Without GitHub's own checksum there is nothing to verify the download against, so only the page is offered.

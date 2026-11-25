@@ -8,7 +8,8 @@ from pathlib import Path
 import tempfile
 
 from version import __version__
-import winarch
+import cpuarch
+import system
 
 
 def self_test(output):
@@ -48,16 +49,17 @@ def self_test(output):
 
     check("ffmpeg", ffmpeg_check)
 
-    def refalac_check():
+    def encoder_check():
         import math
         import struct
         import subprocess
         import wave
         import encoders
-        tool = encoders.refalac()
+        import system
+        mac = system.MAC
+        tool = encoders.afconvert() if mac else encoders.refalac()
         if not tool:
-            raise ValueError("缺少 refalac64.exe")
-        exe, env = tool
+            raise ValueError("缺少 afconvert" if mac else "缺少 refalac64.exe")
         with tempfile.TemporaryDirectory(prefix="classicdrop-selftest") as tmp:
             tmp = Path(tmp)
             source = tmp / "tone.wav"
@@ -71,19 +73,26 @@ def self_test(output):
                     for sample in (int(12000 * math.sin(2 * math.pi * 440 * n / 44100)),))
                 wav.writeframes(frames)
             destination = tmp / "tone.m4a"
-            encoded = subprocess.run([exe, str(source), "-o", str(destination), "--silent"],
-                                     capture_output=True, env=env, timeout=60)
-            if encoded.returncode or not destination.is_file():
-                raise ValueError(encoded.stderr.decode("utf8", "replace")[-200:] or "refalac 编码失败")
+            if mac:
+                encoders.afconvert_encode(["-f", "m4af", "-d", "alac"], ["-i", str(source)],
+                                          "pcm_s16le", destination)
+                if not destination.is_file():
+                    raise ValueError("afconvert 没有产出 m4a")
+            else:
+                exe, env = tool
+                encoded = subprocess.run([exe, str(source), "-o", str(destination), "--silent"],
+                                         capture_output=True, env=env, timeout=60)
+                if encoded.returncode or not destination.is_file():
+                    raise ValueError(encoded.stderr.decode("utf8", "replace")[-200:] or "refalac 编码失败")
             from imageio_ffmpeg import get_ffmpeg_exe
             decoded = subprocess.run([get_ffmpeg_exe(), "-nostdin", "-hide_banner", "-loglevel", "error",
                               "-i", str(destination), "-f", "null", "-"],
                              capture_output=True, timeout=30)
             if decoded.returncode:
-                raise ValueError("ffmpeg 无法解码 refalac 输出")
-        return exe
+                raise ValueError("ffmpeg 无法解码编码器输出")
+        return tool if mac else tool[0]
 
-    check("refalac", refalac_check)
+    check("afconvert" if system.MAC else "refalac", encoder_check)
 
     def tkdnd_check():
         from tkinterdnd2 import TkinterDnD
@@ -96,8 +105,8 @@ def self_test(output):
 
     report = {
         "version": __version__,
-        "process_arch": winarch.process_arch(),
-        "host_arch": winarch.host_arch(),
+        "process_arch": cpuarch.process_arch(),
+        "host_arch": cpuarch.host_arch(),
         "machine": __import__("platform").machine(),
         "wasmtime_dll": str(checks["wasmtime"]["detail"]) if checks["wasmtime"]["ok"] else "",
         "checks": checks,
