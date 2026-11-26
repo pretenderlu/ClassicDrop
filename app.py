@@ -945,8 +945,8 @@ class App(RatingMixin):
             return
         batch, target, direct = result
         for song in initial:
-            if song.path not in batch:
-                self.pending.pop(song.path, None)
+            if song.key not in batch:
+                self.pending.pop(song.key, None)
         self.pending.update(batch)
         previous_target = self.queue_target
         if batch:

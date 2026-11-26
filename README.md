@@ -1,10 +1,10 @@
-# ClassicDrop 1.6.2
+# ClassicDrop 1.6.3
 
 Windows 与 macOS 下的 iPod classic 原厂曲库工具。面向已经有原厂曲库的 IPC3（2009 年末 160 GB 薄款）。所有日常操作都在本地完成。iPod nano 第 3、4 代使用同一种曲库，也可以读写，但还没有在真机上验证过，见「支持的机型」。支持 Windows 10/11 x64 与 macOS 12+（Apple 芯片和 Intel）；在 Windows 11 ARM64 电脑上以模拟方式运行 x64 版（Windows 10 ARM64 不能运行 x64 程序，不支持）。
 
 ## 安装与更新
 
-从 [Releases](https://github.com/pretenderlu/ClassicDrop/releases) 下载 `ClassicDropSetup-v1.6.2.exe` 并运行。程序装在 `%LOCALAPPDATA%\Programs\ClassicDrop`，安装和卸载都不需要管理员权限。同一页面的 `ClassicDrop-Windows-x64.zip` 是免安装版，解压后运行其中的 ClassicDrop.exe。
+从 [Releases](https://github.com/pretenderlu/ClassicDrop/releases) 下载 `ClassicDropSetup-v1.6.3.exe` 并运行。程序装在 `%LOCALAPPDATA%\Programs\ClassicDrop`，安装和卸载都不需要管理员权限。同一页面的 `ClassicDrop-Windows-x64.zip` 是免安装版，解压后运行其中的 ClassicDrop.exe。
 
 启动后程序会向 GitHub 查询最新的正式版本。窗口右下角有 GitHub 链接、「反馈」和当前版本号。点「反馈」会打开一个小窗口，列出诊断信息（软件版本、Windows 版本、iPod 机型、最近一次报错和最近的运行日志）供先过目，再复制到剪贴板并打开 GitHub 的新建 Issue 页面。运行日志存在 `%LOCALAPPDATA%\ClassicDrop\Logs`，最多 3 个文件、每个 1 MB，会自动轮替。日志里会记录歌曲文件名；设备序列号、FireWire GUID 和设备名称一律不写入，写日志和诊断信息前会被替换成「[已隐藏]」，你的用户文件夹显示为 `~`。点版本号可以查看各个版本的更新记录。有新版本时，版本号旁边会出现一个红点，更新记录里会多出「下载并安装」按钮。点它之后程序下载安装包，核对 GitHub 提供的 SHA-256 校验值，再自动安装并重新打开。正在传歌，或待传列表里还有歌曲时，需要先处理完再更新。也可以随时点「工具与备份 → 检查更新」。下载失败时可以重试，或打开发布页手动下载。查询只访问 GitHub 的发布接口，不上传任何曲库或设备信息。
 
@@ -36,13 +36,14 @@ nano 第 3、4 代的曲库格式和校验方式与 classic 相同。程序按�
 
 1. 用可传数据的 30 针线连接 iPod，让 Windows 能看到设备盘符。关闭正在同步这台设备的软件。
 2. 点「刷新」自动识别。也可以点「选择设备」打开含有隐藏目录 `iPod_Control` 的盘符根目录。
-3. 点「导入文件夹」或「添加歌曲」，也可以把文件和文件夹一起拖进窗口。文件夹会包含子目录中的 MP3、M4A、FLAC、WAV、DSF 和 DFF。「导入预览」列出可读取的歌曲，点选一首即可查看封面与信息。
+3. 点「导入文件夹」或「添加歌曲」，也可以把文件和文件夹一起拖进窗口。文件夹会包含子目录中的 MP3、M4A、FLAC、WAV、APE、WV（WavPack）、TTA、AIFF、DSF、DFF 以及 CUE 整轨分轨表。CUE 会按 `INDEX 01` 无缝展开为独立曲目并自动去重对应整轨，在「导入预览」中与其他歌曲一样逐首核对封面、信息和格式。
 4. 核对或修改歌名、歌手、专辑、封面及传输格式。在「传入位置」选择已有歌单，或点旁边的「新建播放列表」输入名称。点「确认传入 iPod」，本批歌曲和新歌单会一起写入。设备已有的相同音频也会加入歌单。
 5. 等传输完成后，点左侧设备栏的「弹出设备」。看到「已安全弹出」后拔线，在 iPod 的原厂「音乐」菜单中查找刚传入的歌曲或播放列表。Windows 提示设备被占用时，关闭占用它的程序或文件窗口，再点一次。只读连接也可以弹出，打开电脑上的曲库副本时按钮会禁用。
 
 ## 传输格式
 
-- **Apple Lossless（ALAC）** 是 FLAC 或整数 PCM WAV 的默认选项。单声道或双声道音源在 24 位、48 kHz 以内（含上限）时，保留原采样率和全部音频采样。例如 16 位 / 44.1 kHz、24 位 / 44.1 kHz 和 24 位 / 48 kHz 均按各自的规格输出 M4A。
+- **Apple Lossless（ALAC）** 是 FLAC、整数 PCM WAV、APE、WV、TTA、AIFF 及无损 CUE 整轨的默认选项。单声道或双声道音源在 24 位、48 kHz 以内（含上限）时，保留原采样率和全部音频采样。例如 16 位 / 44.1 kHz、24 位 / 44.1 kHz 和 24 位 / 48 kHz 均按各自的规格输出 M4A。
+- **CUE + 整轨自动分轨** 支持单文件和多文件 CUE，自动识别 UTF-8 / UTF-16 / GB18030 / Big5 / Shift-JIS 编码；当 CUE 里的 `FILE` 扩展名与实际文件不同（如写 `.wav` 而目录中是 `.flac`/`.ape`/`.wv`）或单整轨改名时会自动匹配。默认按每轨 `INDEX 01` 到下一轨 `INDEX 01` 采样级无缝切分，写入音轨号、碟号、年份、流派与封面，并保留确定性校验以支持重复导入去重。
 - **ALAC 24 位 / 48 kHz** 用于有效位深超过 24 位或采样率超过 48 kHz 的音源，包括高规格 M4A。超出任一项就固定转到此规格，例如 32 位 / 44.1 kHz、16 位 / 88.2 kHz 和 24 位 / 192 kHz。单声道保留，多声道混合为立体声。
 - **DSF 和 DFF（DSD 音频）** 统一转换为 24 位 / 48 kHz PCM，再用 ALAC 保存为 M4A。DFF 支持未压缩的 DSD 和 DST 压缩，歌名和歌手会读取 ID3 标签或文件自带的 DIIN 信息。
 - **ALAC 兼容转换** 可将位深和采样率在范围内的多声道 FLAC 或 WAV 混合为立体声。

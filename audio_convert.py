@@ -11,20 +11,26 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from imageio_ffmpeg import get_ffmpeg_exe
+from cue import CueKey
 import diagnostics
 import encoders
 import system
+from mutagen.aiff import AIFF
 from mutagen.dsdiff import DSDIFF, DSDIFFFile
 from mutagen.dsf import DSF, DSFFile
 from mutagen.easymp4 import EasyMP4
 from mutagen._riff import RiffFile
 from mutagen.flac import FLAC, VCFLACDict
 from mutagen._vorbis import VorbisEncodingError
+from mutagen.monkeysaudio import MonkeysAudio
 from mutagen.mp3 import EasyMP3, MP3
 from mutagen.mp4 import Atoms, MP4, MP4Cover
+from mutagen.trueaudio import TrueAudio
 from mutagen.wave import WAVE
+from mutagen.wavpack import WavPack
 
-ASK_FORMAT = {".flac", ".wav", ".dsf", ".dff"}
+ASK_FORMAT = {".flac", ".wav", ".dsf", ".dff", ".ape", ".wv", ".tta", ".aif", ".aiff"}
+LOSSLESS_CODECS = {".flac", ".ape", ".wv", ".tta", ".aif", ".aiff"}
 DSD_FILES = (".dsf", ".dff")
 MAX_ALAC_BITS = 24
 MAX_ALAC_RATE = 48000
@@ -32,6 +38,9 @@ LABELS = {"copy": "原格式", "alac": "ALAC 无损", "alac-fit": "ALAC 兼容�
           "alac-48": f"ALAC {MAX_ALAC_BITS} 位 / {MAX_ALAC_RATE // 1000} kHz", "aac": "AAC-LC"}
 TAG_KEYS = {"title": "TIT2", "artist": "TPE1", "album": "TALB", "albumartist": "TPE2",
             "date": "TDRC", "genre": "TCON", "tracknumber": "TRCK", "discnumber": "TPOS"}
+APE_KEYS = {"title": ("title",), "artist": ("artist",), "album": ("album",),
+            "albumartist": ("album artist", "albumartist"), "date": ("year", "date"),
+            "genre": ("genre",), "tracknumber": ("track", "tracknumber"), "discnumber": ("disc", "discnumber")}
 MP4_ATOMS = {"title": "©nam", "artist": "©ART", "album": "©alb", "albumartist": "aART",
              "date": "©day", "genre": "©gen", "tracknumber": "trkn", "discnumber": "disk"}
 AAC_RATES = (8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000)
@@ -227,7 +236,28 @@ def mp4_audio(path):
     return audio
 
 
-READERS = {".mp3": EasyMP3, ".m4a": mp4_audio, ".flac": _SourceFLAC, ".wav": _read_wave, ".dsf": _read_dsf, ".dff": _read_dff}
+def _read_tta(path):
+    audio = TrueAudio(path)
+    with open(path, "rb") as stream:
+        head = stream.read(10)
+        offset = 0
+        if head[:3] == b"ID3" and len(head) == 10:
+            # Synchsafe ID3v2 size sits in bytes 6..10.
+            size = ((head[6] & 0x7F) << 21) | ((head[7] & 0x7F) << 14) | ((head[8] & 0x7F) << 7) | (head[9] & 0x7F)
+            offset = 10 + size
+        stream.seek(offset)
+        tta = stream.read(18)
+    if len(tta) >= 10 and tta.startswith(b"TTA1"):
+        audio.info.channels = int.from_bytes(tta[6:8], "little")
+        audio.info.bits_per_sample = int.from_bytes(tta[8:10], "little")
+    return audio
+
+
+READERS = {
+    ".mp3": EasyMP3, ".m4a": mp4_audio, ".flac": _SourceFLAC, ".wav": _read_wave,
+    ".dsf": _read_dsf, ".dff": _read_dff, ".ape": MonkeysAudio, ".wv": WavPack,
+    ".tta": _read_tta, ".aif": AIFF, ".aiff": AIFF,
+}
 
 
 def source_audio(path):
@@ -280,7 +310,20 @@ def riff_tags(path, changes=None):
 
 def source_tags(audio):
     tags = audio.tags or {}
-    if not isinstance(audio, (WAVE, DSF, DSDIFF)):
+    if isinstance(audio, (MonkeysAudio, WavPack)):
+        lowered = {k.lower(): v for k, v in tags.items()}
+        result = {}
+        for key, aliases in APE_KEYS.items():
+            for alias in aliases:
+                item = lowered.get(alias)
+                if item is None or getattr(item, "kind", 0) != 0:
+                    continue
+                values = [str(v).strip() for v in item if str(v).strip()]
+                if values:
+                    result[key] = values
+                    break
+        return result
+    if not isinstance(audio, (WAVE, DSF, DSDIFF, TrueAudio, AIFF)):
         return tags
     result = (riff_tags(audio.filename) if isinstance(audio, WAVE)
               else dff_comments(audio.filename) if isinstance(audio, DSDIFF) else {})
@@ -289,19 +332,22 @@ def source_tags(audio):
     return result
 
 
-def lossless_profile(path, audio=None):
+def lossless_profile(path, audio=None, *, allow_alac_m4a=False):
     """True when ALAC can retain the source samples without resampling or mixing."""
     audio = audio if audio is not None else source_audio(path)
     info = audio.info
     if not (0 < info.sample_rate <= MAX_ALAC_RATE and info.channels in (1, 2) and 0 < info.bits_per_sample <= MAX_ALAC_BITS):
         return False
-    if path.suffix.lower() == ".wav":
+    suffix = path.suffix.lower()
+    if suffix == ".wav":
         try:
             with wave.open(str(path), "rb") as pcm:
                 return pcm.getcomptype() == "NONE"
         except (wave.Error, EOFError):
             return False
-    return path.suffix.lower() == ".flac"
+    if allow_alac_m4a and suffix == ".m4a":
+        return (getattr(info, "codec", "") or "").lower() == "alac"
+    return suffix in LOSSLESS_CODECS
 
 
 def _artist_folder(source):
@@ -316,9 +362,39 @@ def _artist_folder(source):
     return artist
 
 
-def _metadata(source, audio, destination, *, song=None):
+def _ape_pictures(tags):
+    if not tags:
+        return ()
+    entries = []
+    for key, item in tags.items():
+        if "cover art" not in key.lower() or getattr(item, "kind", 0) != 1:
+            continue
+        raw = bytes(item.value)
+        sep = raw.find(b"\0")
+        if sep < 0 or sep + 1 >= len(raw):
+            continue
+        entries.append((0 if "front" in key.lower() else 1, raw[sep + 1:]))
+    entries.sort(key=lambda pair: pair[0])
+    return tuple(data for _, data in entries)
+
+
+def _metadata(source, audio, destination, *, song=None, cue=None):
     suffix = source.suffix.lower()
-    tags = source_tags(audio)
+    tags = dict(source_tags(audio))
+    if cue is not None:
+        cue_fields = {
+            "title": cue.title,
+            "artist": cue.artist,
+            "album": cue.album,
+            "albumartist": cue.album_artist,
+            "date": cue.date,
+            "genre": cue.genre,
+            "tracknumber": f"{cue.track_number}/{cue.total_tracks}",
+            "discnumber": cue.disc_number,
+        }
+        for key, value in cue_fields.items():
+            if value:
+                tags[key] = [value]
     result = MP4(destination)
     if result.tags is None:
         result.add_tags()
@@ -360,6 +436,13 @@ def _metadata(source, audio, destination, *, song=None):
                 result["©ART"] = [artist]
         if suffix == ".m4a":
             covers = MP4(source).get("covr", [])
+        elif suffix in (".ape", ".wv"):
+            covers = []
+            for data in _ape_pictures(audio.tags):
+                if data.startswith(b"\x89PNG\r\n\x1a\n"):
+                    covers.append(MP4Cover(data, imageformat=MP4Cover.FORMAT_PNG))
+                elif data.startswith(b"\xff\xd8"):
+                    covers.append(MP4Cover(data, imageformat=MP4Cover.FORMAT_JPEG))
         else:
             if suffix == ".flac":
                 pictures = audio.pictures
@@ -510,19 +593,35 @@ def _flac_recovery(source, info, folder):
     return raw, ["-f", fmt, "-ar", str(info.sample_rate), "-ac", str(info.channels)]
 
 
-def _convert(source, mode, destination, *, song=None):
+def _verify_cue_duration(expected, encoded, is_last):
+    tolerance = 0.08 if is_last else 0.02
+    if expected > 0 and abs(encoded.length - expected) > tolerance:
+        raise ValueError(f"分轨时长未通过校验。预期 {expected:.3f} 秒，转换后为 {encoded.length:.3f} 秒。")
+
+
+def _convert(source, mode, destination, *, song=None, cue=None):
     if mode not in ("alac", "alac-fit", "alac-48", "aac"):
         raise ValueError("未知的传输格式。")
     audio = source_audio(source)
     info = audio.info
     if info.sample_rate <= 0 or info.channels <= 0:
         raise ValueError("无法读取源文件的采样率或声道数。")
+    expected_cue_length = None
+    if cue is not None:
+        if cue.start_seconds >= info.length:
+            raise ValueError(f"第 {cue.track_number} 轨的起始时间超过整轨音频总时长。")
+        if cue.end_frames is not None and cue.end_frames / 75.0 > info.length + 0.5:
+            raise ValueError(f"第 {cue.track_number} 轨的结束时间超过整轨音频总时长。")
+        expected_cue_length = cue.duration_seconds(info.length)
+        if expected_cue_length <= 0:
+            raise ValueError(f"第 {cue.track_number} 轨的时长无效。")
     suffix = source.suffix.lower()
     if needs_48k_alac(audio):
         mode = "alac-48"
-    if mode in ("alac", "alac-fit") and suffix not in ASK_FORMAT:
-        raise ValueError("请选择 FLAC、WAV、DSF 或 DFF 作为 ALAC 转换源。")
-    if mode == "alac" and not lossless_profile(source, audio):
+    alac_m4a_cue = cue is not None and suffix == ".m4a" and (getattr(info, "codec", "") or "").lower() == "alac"
+    if mode in ("alac", "alac-fit") and suffix not in ASK_FORMAT and not alac_m4a_cue:
+        raise ValueError("请选择无损音频作为 ALAC 转换源。")
+    if mode == "alac" and not lossless_profile(source, audio, allow_alac_m4a=alac_m4a_cue):
         raise ValueError("此音源需要适配。请在待传列表的「传输格式」中选择 ALAC 兼容转换或 AAC。")
     rate = MAX_ALAC_RATE if mode == "alac-48" else info.sample_rate
     bits = MAX_ALAC_BITS if mode == "alac-48" or getattr(info, "bits_per_sample", 0) > 16 else 16
@@ -534,10 +633,29 @@ def _convert(source, mode, destination, *, song=None):
                                     "-bits_per_raw_sample", str(bits)])
     decoder = ["-c:a", info.pcm_decoder] if hasattr(info, "pcm_decoder") else []
     # Bound the stereo mix before encoding multichannel DSD, including the floating-point AAC path.
-    downmix = ["-af", f"aresample={rate}:ochl=stereo:rematrix_maxval=1"] if suffix in DSD_FILES and info.channels > 2 else []
+    downmix_expr = f"aresample={rate}:ochl=stereo:rematrix_maxval=1" if suffix in DSD_FILES and info.channels > 2 else ""
+
+    def slice_parts(raw_pcm):
+        """Return (pre_input_args, post_input_args, filter_args) for optional CUE track slicing."""
+        pre, post, filters = [], [], []
+        if cue is not None:
+            if raw_pcm:
+                start_s, end_s = cue.sample_range(info.sample_rate)
+                trim = f"atrim=start_sample={start_s}" + (f":end_sample={end_s}" if end_s is not None else "")
+                filters.append(trim + ",asetpts=PTS-STARTPTS")
+            else:
+                if cue.start_frames > 0:
+                    pre.extend(["-ss", f"{cue.start_seconds:.9f}"])
+                if cue.end_frames is not None:
+                    post.extend(["-t", f"{expected_cue_length:.9f}"])
+        if downmix_expr:
+            filters.append(downmix_expr)
+        return pre, post, (["-af", ",".join(filters)] if filters else [])
+
     def decode_args(origin, origin_input=()):
-        return [*decoder, *origin_input, "-i", str(origin), "-map", "0:a:0", "-vn", "-sn", "-dn",
-                *downmix, "-ar", str(rate), "-ac", str(channels), "-threads:a", "1",
+        pre, post, af = slice_parts(raw_pcm=origin != source)
+        return [*pre, *decoder, *origin_input, "-i", str(origin), "-map", "0:a:0", "-vn", "-sn", "-dn",
+                *post, *af, "-ar", str(rate), "-ac", str(channels), "-threads:a", "1",
                 "-fflags", "+bitexact", "-flags:a", "+bitexact"]
     candidates = []
     if mode == "aac":
@@ -594,10 +712,11 @@ def _convert(source, mode, destination, *, song=None):
             done = True
             break
         if not done:
-            _ffmpeg(["-n", "-protocol_whitelist", "file", *decoder, *origin_input, "-i", str(origin),
+            pre, post, af = slice_parts(raw_pcm=origin != source)
+            _ffmpeg(["-n", "-protocol_whitelist", "file", *pre, *decoder, *origin_input, "-i", str(origin),
                      "-map", "0:a:0", "-vn", "-sn", "-dn",
                      "-map_metadata", "0", "-map_chapters", "-1", "-metadata", "creation_time=",
-                     *downmix, *codec, "-ar", str(rate), "-ac", str(channels), "-threads:a", "1", "-fflags", "+bitexact",
+                     *post, *af, *codec, "-ar", str(rate), "-ac", str(channels), "-threads:a", "1", "-fflags", "+bitexact",
                      "-flags:a", "+bitexact", "-f", "ipod", str(destination)])
 
     pcm_source = (source, ())
@@ -614,7 +733,7 @@ def _convert(source, mode, destination, *, song=None):
         encode(clean, clean_input)
         pcm_source = (clean, clean_input)
     try:
-        _metadata(source, audio, destination, song=song)
+        _metadata(source, audio, destination, song=song, cue=cue)
         encoded = mp4_audio(destination).info
         want = "mp4a.40.2" if mode == "aac" else "alac"
         if (encoded.codec != want or encoded.sample_rate != rate or encoded.channels != channels or encoded.length <= 0
@@ -624,7 +743,10 @@ def _convert(source, mode, destination, *, song=None):
                              f"实际为 {encoded.codec}、{encoded.sample_rate} Hz、{encoded.channels} 声道、"
                              f"{encoded.bits_per_sample} 位、{encoded.length:.3f} 秒。")
         if mode != "aac":
-            _verify_duration(source, info, destination, encoded, pcm_source)
+            if cue is not None:
+                _verify_cue_duration(expected_cue_length, encoded, cue.end_frames is None)
+            else:
+                _verify_duration(source, info, destination, encoded, pcm_source)
     finally:
         if pcm_source[0] != source:
             # The proven PCM copy can be hundreds of MB; drop it as soon as the file is checked.
@@ -633,25 +755,29 @@ def _convert(source, mode, destination, *, song=None):
 
 @contextmanager
 def prepared_files(files, formats, device_root, report, *, reviewed=None):
-    files = tuple(Path(p) for p in files)
+    files = tuple(p if isinstance(p, CueKey) else Path(p) for p in files)
     formats = dict(formats or {})
     reviewed = reviewed or {}
-    if reviewed and (set(reviewed) != set(files) or any(p.resolve() != song.path or formats.get(p, song.mode) not in song.choices
-                                                       for p, song in reviewed.items())):
+    if reviewed and (set(reviewed) != set(files) or any(
+            (item != song.key if isinstance(item, CueKey) else item.resolve() != song.path)
+            or formats.get(item, song.mode) not in song.choices
+            for item, song in reviewed.items())):
         raise ValueError("预览的歌曲或传输格式与本批文件不一致。")
     if formats.keys() - set(files):
         raise ValueError("所选传输格式与待传文件不一致。")
-    for source in files:
+    for item in files:
         if reviewed:
-            song = reviewed[source]
+            song = reviewed[item]
             song.check_source()
-            formats.setdefault(source, song.mode)
-        elif source.suffix.lower() in READERS:
+            formats.setdefault(item, song.mode)
+        elif isinstance(item, CueKey):
+            raise ValueError("CUE 分轨需要通过导入预览确认后传入。")
+        elif item.suffix.lower() in READERS:
             try:
-                if needs_48k_alac(source_audio(source)):
-                    formats[source] = "alac-48"
+                if needs_48k_alac(source_audio(item)):
+                    formats[item] = "alac-48"
             except Exception as exc:
-                raise ValueError(f"{source.name}\n{exc}") from exc
+                raise ValueError(f"{item.name}\n{exc}") from exc
     if not any(formats.get(p, "copy") != "copy" for p in files) and not any(s.needs_copy for s in reviewed.values()):
         yield files
         return
@@ -660,25 +786,30 @@ def prepared_files(files, formats, device_root, report, *, reviewed=None):
         raise ValueError("转码需要电脑上的临时目录。")
     with tempfile.TemporaryDirectory(prefix="ClassicDrop-audio-", dir=temp_root) as folder:
         output = []
-        for index, source in enumerate(files, 1):
-            mode = formats.get(source, "copy")
-            song = reviewed.get(source)
+        for index, item in enumerate(files, 1):
+            mode = formats.get(item, "copy")
+            song = reviewed.get(item)
+            cue = song.cue if song else None
             if mode == "copy" and not (song and song.needs_copy):
-                output.append(source)
+                output.append(item)
                 continue
+            source = song.path if song else item
+            label_name = song.title if (song and cue is not None) else source.name
             try:
                 source = source.resolve(strict=True)
                 stamp = source.stat()
                 if mode == "copy":
+                    if cue is not None:
+                        raise ValueError("CUE 分轨必须转换后传入。")
                     dest = Path(folder) / f"{index}{source.suffix}"
-                    report(f"正在写入歌曲信息 {index}/{len(files)} · {source.name}")
+                    report(f"正在写入歌曲信息 {index}/{len(files)} · {label_name}")
                     shutil.copyfile(source, dest)
                     if song:
                         song.write_tags(dest, False)
                 else:
                     dest = Path(folder) / f"{index}.m4a"
-                    report(f"正在转换 {index}/{len(files)} · {source.name} → {LABELS.get(mode, mode)}")
-                    _convert(source, mode, dest, song=song)
+                    report(f"正在转换 {index}/{len(files)} · {label_name} → {LABELS.get(mode, mode)}")
+                    _convert(source, mode, dest, song=song, cue=cue)
                 if song:
                     song.check_source()
                 end = source.stat()
@@ -687,5 +818,6 @@ def prepared_files(files, formats, device_root, report, *, reviewed=None):
                 os.utime(dest, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
                 output.append(dest)
             except Exception as exc:
-                raise ValueError(f"{source.name}\n{exc}") from exc
+                err_name = song.display_name if song else source.name
+                raise ValueError(f"{err_name}\n{exc}") from exc
         yield output

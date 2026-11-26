@@ -13,8 +13,9 @@ from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4, MP4Cover
 from mutagen.wave import WAVE
 
+from cue import CueSlice, parse_cue
 import system
-from audio_convert import (ASK_FORMAT, GENERIC_FOLDERS, READERS, is_native_playable, lossless_profile,
+from audio_convert import (ASK_FORMAT, GENERIC_FOLDERS, READERS, _ape_pictures, is_native_playable, lossless_profile,
                            needs_48k_alac, riff_tags, source_audio, source_tags, tag_text)
 
 FIELDS = ("title", "artist", "album")
@@ -35,10 +36,13 @@ def picture_data(path, audio=None):
     elif suffix == ".flac":
         pictures = (audio if audio is not None else source_audio(path)).pictures
         yield from (p.data for p in sorted(pictures, key=lambda p: p.type != 3))
-    elif suffix in (".mp3", ".dsf", ".dff", ".wav", ".wave", ".aif", ".aiff", ".aifc"):
+    elif suffix in (".ape", ".wv"):
+        tags = (audio if audio is not None else source_audio(path)).tags
+        yield from _ape_pictures(tags)
+    elif suffix in (".mp3", ".dsf", ".dff", ".wav", ".wave", ".aif", ".aiff", ".aifc", ".tta"):
         if suffix == ".mp3":
             tags = ID3(path)
-        elif suffix in (".dsf", ".dff"):
+        elif suffix in (".dsf", ".dff", ".tta"):
             tags = (audio if audio is not None else source_audio(path)).tags
         else:
             audio = audio if audio is not None else (WAVE if suffix in (".wav", ".wave") else AIFF)(path)
@@ -169,6 +173,15 @@ class ImportSong:
     choices: tuple
     original_text: tuple
     original_cover: Cover | None
+    cue: CueSlice | None = None
+
+    @property
+    def key(self):
+        return self.cue.key if self.cue is not None else self.path
+
+    @property
+    def display_name(self):
+        return f"{self.cue.cue_path.name} · 第 {self.cue.track_number} 轨" if self.cue is not None else self.path.name
 
     @property
     def text_changes(self):
@@ -177,11 +190,13 @@ class ImportSong:
 
     @property
     def needs_copy(self):
-        return bool(self.text_changes) or self.cover != self.original_cover
+        return self.cue is not None or bool(self.text_changes) or self.cover != self.original_cover
 
     def check_source(self):
         if _stamp(self.path) != self.stamp:
             raise ValueError(f"预览后歌曲已变化，请重新添加：{self.path.name}")
+        if self.cue is not None and _stamp(self.cue.cue_path) != self.cue.cue_stamp:
+            raise ValueError(f"预览后 CUE 文件已变化，请重新添加：{self.cue.cue_path.name}")
 
     def write_tags(self, dest, converted):
         """Only called for a prepared PC copy, never an original."""
@@ -230,13 +245,7 @@ class ImportSong:
                 riff_tags(dest, changes)
 
 
-def _read_song(path, folder_covers):
-    stamp = _stamp(path)
-    audio = source_audio(path)
-    tags = source_tags(audio)
-    original = tuple(tag_text(tags, k) for k in FIELDS)
-    folder, artist, album = _folder_tags(path)
-    embedded = _embedded(path, audio, stamp)
+def _find_cover(path, embedded, album_folder, folder_covers):
     cover = embedded
     directory = path.parent
     while cover is None:
@@ -246,23 +255,95 @@ def _read_song(path, folder_covers):
             except PermissionError:
                 folder_covers[directory] = None
         cover = folder_covers[directory]
-        if directory == folder:
+        if directory == album_folder:
             break
         directory = directory.parent
+    return cover
+
+
+def _song_choices(path, audio, *, for_cue=False):
     suffix = path.suffix.lower()
     if needs_48k_alac(audio):
-        choices = ("alac-48",)
-    elif suffix in ASK_FORMAT:
+        return ("alac-48",)
+    if for_cue:
+        alac_m4a = suffix == ".m4a" and (getattr(audio.info, "codec", "") or "").lower() == "alac"
+        if suffix in ASK_FORMAT or alac_m4a:
+            exact = lossless_profile(path, audio, allow_alac_m4a=alac_m4a)
+            return (("alac" if exact else "alac-fit"), "aac")
+        return ("aac",)
+    if suffix in ASK_FORMAT:
         exact = lossless_profile(path, audio)
-        choices = ("alac", "copy", "aac") if exact and suffix == ".wav" else (("alac" if exact else "alac-fit"), "aac")
-    else:
-        choices = ("copy", "aac") if is_native_playable(suffix, audio.info) else ("aac",)
+        return ("alac", "copy", "aac") if exact and suffix == ".wav" else (("alac" if exact else "alac-fit"), "aac")
+    return ("copy", "aac") if is_native_playable(suffix, audio.info) else ("aac",)
+
+
+def _read_song(path, folder_covers):
+    stamp = _stamp(path)
+    audio = source_audio(path)
+    tags = source_tags(audio)
+    original = tuple(tag_text(tags, k) for k in FIELDS)
+    folder, artist, album = _folder_tags(path)
+    embedded = _embedded(path, audio, stamp)
+    cover = _find_cover(path, embedded, folder, folder_covers)
+    choices = _song_choices(path, audio)
     return ImportSong(path, stamp, original[0] or path.stem, original[1] or tag_text(tags, "albumartist") or artist,
                       original[2] or album, cover, choices[0], choices, original, embedded)
 
 
+def _read_cue(cue_path, known, folder_covers):
+    slices = parse_cue(cue_path, READERS)
+    audio_cache = {}
+    songs = []
+    consumed = set()
+    for item in slices:
+        audio_path = item.audio_path
+        if audio_path not in audio_cache:
+            stamp = _stamp(audio_path)
+            audio = source_audio(audio_path)
+            info = audio.info
+            if info.sample_rate <= 0 or info.channels <= 0 or info.length <= 0:
+                raise ValueError(f"无法读取整轨音频参数：{audio_path.name}")
+            tags = source_tags(audio)
+            folder, folder_artist, folder_album = _folder_tags(audio_path)
+            embedded = _embedded(audio_path, audio, stamp)
+            cover = _find_cover(audio_path, embedded, folder, folder_covers)
+            choices = _song_choices(audio_path, audio, for_cue=True)
+            audio_cache[audio_path] = (stamp, info, tags, folder_artist, folder_album, embedded, cover, choices)
+        stamp, info, tags, folder_artist, folder_album, embedded, cover, choices = audio_cache[audio_path]
+        if item.start_seconds >= info.length or (item.end_frames is not None and item.end_frames / 75.0 > info.length + 0.5):
+            raise ValueError(f"第 {item.track_number} 轨的时间点超过整轨音频长度。")
+        previous = known.get(item.key)
+        if (previous and previous.path == audio_path and previous.stamp == stamp
+                and previous.cue is not None and previous.cue.cue_stamp == item.cue_stamp):
+            songs.append(previous)
+        else:
+            original = (item.title, item.artist, item.album)
+            title = item.title or f"{audio_path.stem} - {item.track_number:02d}"
+            artist = item.artist or tag_text(tags, "artist") or tag_text(tags, "albumartist") or folder_artist
+            album = item.album or tag_text(tags, "album") or folder_album
+            songs.append(ImportSong(audio_path, stamp, title, artist, album, cover, choices[0], choices,
+                                    original, embedded, cue=item))
+        consumed.add(audio_path)
+    return songs, consumed
+
+
 def scan_inputs(inputs, known, report, cancelled):
     songs, errors, seen, folder_covers = [], [], set(), {}
+    natural = lambda s: [int(v) if v.isdecimal() else v.casefold() for v in re.split(r"(\d+)", s)]
+
+    def read_cue(cue_path):
+        try:
+            cue_path = cue_path.resolve(strict=True)
+            if cue_path in seen:
+                return
+            seen.add(cue_path)
+            report(f"正在解析 CUE · {cue_path.name}")
+            expanded, consumed = _read_cue(cue_path, known, folder_covers)
+            songs.extend(expanded)
+            seen.update(consumed)
+        except (OSError, ValueError, MutagenError, Image.DecompressionBombError) as exc:
+            errors.append(f"{cue_path}　{exc}")
+
     def read(path):
         try:
             path = path.resolve(strict=True)
@@ -275,9 +356,19 @@ def scan_inputs(inputs, known, report, cancelled):
             songs.append(previous if previous and previous.stamp == _stamp(path) else _read_song(path, folder_covers))
         except (OSError, ValueError, MutagenError, Image.DecompressionBombError) as exc:
             errors.append(f"{path}　{exc}")
+
     def walk_error(exc):
         errors.append(str(exc))
-    for path in map(Path, inputs):
+
+    items = [Path(p) for p in inputs]
+    # Parse any directly dropped .cue files first so their paired image audio files are not duplicated.
+    for path in items:
+        if cancelled():
+            return songs, errors
+        if not path.is_dir() and path.suffix.lower() == ".cue":
+            read_cue(path)
+
+    for path in items:
         if cancelled():
             break
         if path.is_dir():
@@ -287,14 +378,25 @@ def scan_inputs(inputs, known, report, cancelled):
                 subdirs[:] = sorted((d for d in subdirs if d.casefold() != "ipod_control"
                                      and d not in system.JUNK_DIRS
                                      and not (directory / d).is_junction()), key=str.casefold)
-                for name in sorted(files, key=lambda s: [int(v) if v.isdecimal() else v.casefold() for v in re.split(r"(\d+)", s)]):
+                ordered = sorted(files, key=natural)
+                for name in ordered:
                     if cancelled():
                         return songs, errors
-                    file = directory / name
                     if system.junk_file(name):
                         continue
+                    file = directory / name
+                    if file.suffix.lower() == ".cue" and file.is_file():
+                        read_cue(file)
+                for name in ordered:
+                    if cancelled():
+                        return songs, errors
+                    if system.junk_file(name):
+                        continue
+                    file = directory / name
                     if file.suffix.lower() in READERS and file.is_file():
                         read(file)
+        elif path.suffix.lower() == ".cue":
+            continue
         elif path.suffix.lower() in READERS:
             read(path)
         else:

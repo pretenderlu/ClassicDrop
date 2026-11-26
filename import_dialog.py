@@ -1,7 +1,6 @@
 """Review local tracks, artwork and encoding together before a transfer."""
 
 from dataclasses import dataclass, replace
-from pathlib import Path
 from queue import Empty, Queue
 from threading import Event, Thread
 import tkinter as tk
@@ -18,7 +17,7 @@ import theme
 
 MODE_NAMES = {"copy": "保留原格式", "alac": "Apple Lossless（ALAC）", "alac-fit": "ALAC 兼容转换", "alac-48": LABELS["alac-48"],
               "aac": "AAC-LC（有损）"}
-AUDIO_TYPES = [("音频文件", " ".join("*" + suffix for suffix in READERS))]
+AUDIO_TYPES = [("音频与 CUE", " ".join("*" + suffix for suffix in (*READERS, ".cue")))]
 
 
 @dataclass(frozen=True)
@@ -46,7 +45,8 @@ class ImportDialog(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self.cancel)
         self.px = theme.scaler(parent)
         self.known = known or {}
-        self.rows = {s.path: s for s in initial}
+        self.rows = {s.key: s for s in initial}
+        self.key_by_iid = {str(s.key): s.key for s in initial}
         self.editing = bool(self.rows)
         self.selected_paths = ()
         self.snapshot = snapshot
@@ -245,14 +245,18 @@ class ImportDialog(tk.Toplevel):
                 songs, errors = data
                 self.errors.extend(errors)
                 for song in songs:
-                    if song.path not in self.rows or song.stamp != self.rows[song.path].stamp:
-                        self.rows[song.path] = song
+                    key = song.key
+                    existing = self.rows.get(key)
+                    changed = (existing is None or song.stamp != existing.stamp
+                               or (song.cue is not None and (existing.cue is None or song.cue.cue_stamp != existing.cue.cue_stamp)))
+                    if changed:
+                        self.rows[key] = song
                         self._row(song)
                 self.scanning = False
                 self._first()
                 self._ready()
                 if not songs:
-                    self.status.set("本次未找到可读取的 MP3、M4A、FLAC、WAV、DSF 或 DFF。")
+                    self.status.set("本次未找到可读取的音频文件或 CUE 分轨表。")
                 return
         except Empty:
             self.timer = self.after(55, self._poll)
@@ -263,7 +267,8 @@ class ImportDialog(tk.Toplevel):
 
     def _row(self, song):
         values = (song.title, song.artist, song.album, LABELS[song.mode])
-        iid = str(song.path)
+        iid = str(song.key)
+        self.key_by_iid[iid] = song.key
         if self.tree.exists(iid):
             self.tree.item(iid, values=values)
         else:
@@ -289,7 +294,7 @@ class ImportDialog(tk.Toplevel):
             self.skipped.pack(side="right")
 
     def _selection(self, _=None):
-        self.selected_paths = tuple(Path(i) for i in self.tree.selection())
+        self.selected_paths = tuple(self.key_by_iid[i] for i in self.tree.selection() if i in self.key_by_iid)
         songs = [self.rows[p] for p in self.selected_paths]
         self.loading = True
         try:
@@ -314,12 +319,14 @@ class ImportDialog(tk.Toplevel):
         lines = []
         if len(songs) == 1:
             s = songs[0]
-            lines.append(s.path.name)
+            lines.append(s.display_name)
             missing = [label for i, label in ((1, "歌手"), (2, "专辑")) if not s.original_text[i] and getattr(s, FIELDS[i])]
             if missing:
                 lines.append("已补全" + "、".join(missing))
         elif songs:
             lines.append(f"已选 {len(songs)} 首，修改将应用到所选歌曲。")
+        if any(s.cue is not None for s in songs):
+            lines.append("将按 CUE 自动分轨并转为独立曲目。")
         if any(s.path.suffix.lower() in DSD_FILES for s in songs):
             lines.append("DSF、DFF 的 DSD 音频会先转换为 PCM。")
         if any(s.mode == "alac-48" for s in songs):
@@ -394,7 +401,9 @@ class ImportDialog(tk.Toplevel):
 
     def remove_selected(self, _=None):
         for iid in self.tree.selection():
-            self.rows.pop(Path(iid))
+            key = self.key_by_iid.pop(iid, None)
+            if key is not None:
+                self.rows.pop(key, None)
             self.tree.delete(iid)
         self._first()
         self._ready()
@@ -404,14 +413,14 @@ class ImportDialog(tk.Toplevel):
         if self.scanning or (direct and (not self.device_name or not self.rows)) or (not self.rows and not self.editing):
             return
         changes = {}
-        for p, song in self.rows.items():
-            fields = {key: getattr(song, key).strip() for key in FIELDS}
+        for key, song in self.rows.items():
+            fields = {field: getattr(song, field).strip() for field in FIELDS}
             if not fields["title"] or any(any(ord(c) < 32 for c in value) for value in fields.values()):
-                self.tree.selection_set(str(p))
-                self.tree.see(str(p))
-                messagebox.showerror("歌曲信息", f"请填写歌名，并使用单行文字。\n{p.name}", parent=self)
+                self.tree.selection_set(str(key))
+                self.tree.see(str(key))
+                messagebox.showerror("歌曲信息", f"请填写歌名，并使用单行文字。\n{song.display_name}", parent=self)
                 return
-            changes[p] = replace(song, **fields)
+            changes[key] = replace(song, **fields)
         target = self.targets[self.target.current()][0]
         if self.creating_playlist and changes:
             try:
