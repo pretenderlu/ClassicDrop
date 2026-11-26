@@ -108,5 +108,23 @@ class DiagnosticsTests(unittest.TestCase):
         app.App._hide_device(None, device)
         self.assertEqual(diagnostics.scrub("iPod"), "iPod")
 
+    def test_readonly_device_logs_reason_without_leaking_secrets(self):
+        from types import SimpleNamespace
+        import app
+        diagnostics.setup(self.site / "logs")
+        device = SimpleNamespace(root=self.site, guid=None, profile=None,
+                                 usb_instance=r"USB\VID_05AC&PID_1261\0011223344556677",
+                                 disk_ids=("ZZ1234567AB",), secrets=("SN987654321",),
+                                 readonly_reason="guid_mismatch", signature_scheme=1,
+                                 guid_candidates=1, sysinfo_files=1,
+                                 library=SimpleNamespace(snapshot=SimpleNamespace(device_name="小明的 iPod")))
+        app.App._hide_device(None, device)
+        text = self.file().read_text(encoding="utf8")
+        self.assertIn("只读", text)
+        self.assertIn("原因=guid_mismatch", text)
+        self.assertIn("candidates=1", text)
+        for secret in ("0011223344556677", "ZZ1234567AB", "SN987654321", "小明的 iPod"):
+            self.assertNotIn(secret, text)
+
 if __name__ == "__main__":
     unittest.main()

@@ -143,7 +143,7 @@ def removal_receipt(device, desired, after_hash, report, genius=None):
         readonly = system.is_readonly(path.stat())
         updates[GENIUS] = [_digest(old), "same" if new == old else base64.b64encode(new).decode("ascii"), readonly]
     report(f"已核对 {len(media)} 个独立音频文件。")
-    return dict(before=device.version, after=after_hash, guid=device.guid.hex(),
+    return dict(before=device.version, after=after_hash, guid=device.backup_key,
                 media=list(media.values()), sidecars=updates)
 
 
@@ -159,7 +159,7 @@ def merge_receipt(device, after_hash, counts):
         if retire and data != counts:
             raise ValueError("设备上的播放记录已变化，请刷新后重试。")
         updates[name] = [_digest(data), None if retire else "same", readonly]
-    return dict(before=device.version, after=after_hash, guid=device.guid.hex(), media=[], sidecars=updates)
+    return dict(before=device.version, after=after_hash, guid=device.backup_key, media=[], sidecars=updates)
 
 
 def quarantine(device, receipt, report):
@@ -187,14 +187,14 @@ def checked_receipt(device, plan, backups, kind):
             raise ValueError("操作记录的校验值无效。")
     if backups is None:
         raise ValueError("请在发起操作的电脑上打开「恢复中断操作」。")
-    path = Path(backups) / device.guid.hex() / plan["before"][:20] / (kind + "-" + plan["receipt"] + ".json")
+    path = Path(backups) / device.backup_key / plan["before"][:20] / (kind + "-" + plan["receipt"] + ".json")
     if not path.is_file():
         raise ValueError(f"需要本次操作的电脑备份记录：{path}")
     data = path.read_bytes()
     if _digest(data) != plan["receipt"]:
         raise ValueError("电脑上的操作记录未通过校验。")
     receipt = json.loads(data)
-    if (receipt["before"], receipt["after"], receipt["guid"]) != (plan["before"], plan["after"], device.guid.hex()):
+    if (receipt["before"], receipt["after"], receipt["guid"]) != (plan["before"], plan["after"], device.backup_key):
         raise ValueError("操作记录与设备曲库不匹配。")
     return receipt, path.parent
 

@@ -501,3 +501,26 @@ class WindowsUITests(unittest.TestCase):
                     self.assertEqual(popup.call_args.args[0].entrycget("清空音乐库", "state"), "disabled")
                     self.assertEqual(popup.call_args.args[0].entrycget("补齐设备封面", "state"), "disabled")
                 error.assert_not_called()
+
+    def test_readonly_badge_explains_reason_and_unsigned_disables_guid_entry(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve() / "iPod"
+            copy = mock_device(root)
+            window = self.make_window()
+            ui = app.App(window)
+            window.geometry("900x560+28000+28000")
+            ui.device = replace(copy, guid=None, readonly_reason="no_apple_usb")
+            ui.render()
+            window.update()
+            self.assertEqual(str(ui.device_badge["cursor"]), "hand2")
+            with patch.object(app.messagebox, "showinfo") as info:
+                ui.device_badge.event_generate("<Button-1>")
+                window.update()
+            self.assertIn("读卡器", info.call_args.args[1])
+            with patch.object(app.tk.Menu, "tk_popup", autospec=True) as popup:
+                ui.tools_button.invoke()
+                self.assertEqual(popup.call_args.args[0].entrycget("填写设备 GUID", "state"), "normal")
+                ui.device = replace(copy, guid=None, readonly_reason="unsigned", signature_scheme=0)
+                ui.render()
+                ui.tools_button.invoke()
+                self.assertEqual(popup.call_args.args[0].entrycget("填写设备 GUID", "state"), "disabled")

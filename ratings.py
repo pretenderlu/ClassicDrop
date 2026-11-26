@@ -75,7 +75,7 @@ class RatingMixin:
         """(row iid, slot 1..5) for a click inside the rating glyphs, else (iid or None, None)."""
         iid = self.tree.identify_row(event.y)
         record = self.rows.get(iid, (None,))[0]
-        if getattr(record, "track_id", None) is None or not (self.device and self.device.guid):
+        if getattr(record, "track_id", None) is None or not (self.device and self.device.writable):
             return None, None
         column = self._rating_column()
         if not column or self.tree.identify_column(event.x) != column:
@@ -131,7 +131,7 @@ class RatingMixin:
             self.rating_timer = self.window.after(1000, self._save_ratings)
             return
         dev = self.device
-        if not (dev and dev.guid):
+        if not (dev and dev.writable):
             self._undo_ratings()
             return
         ids = {t.track_id for t in dev.library.snapshot.tracks}
@@ -179,7 +179,7 @@ class RatingMixin:
     def _flush_ratings(self, then):
         """Save pending ratings first, then run then(); failure keeps the batch and stops here."""
         dev = self.device
-        if self.busy or not self.pending_ratings or not (dev and dev.guid):
+        if self.busy or not self.pending_ratings or not (dev and dev.writable):
             then()
             return
         self._cancel_rating_timer()

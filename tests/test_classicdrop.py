@@ -126,12 +126,57 @@ class TransferTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.send([self.audio, fake])
         (self.root / "iPod_Control/Device/SysInfoExtended").unlink()
-        self.assertIsNone(Device.open(self.root).guid)
-        with self.assertRaises(ValueError):
+        ro = Device.open(self.root)
+        self.assertIsNone(ro.guid)
+        self.assertEqual(ro.readonly_reason, "not_volume")
+        with self.assertRaisesRegex(ValueError, "16 位十六进制"):
+            Device.open(self.root, "not-a-guid")
+        with self.assertRaisesRegex(ValueError, "校验不匹配"):
             Device.open(self.root, "deadbeefdeadbeef")
         self.assertEqual(Device.open(self.root, GUID.hex()).guid, GUID)
         self.assertEqual((self.root / DB).read_bytes(), original)
         self.assertEqual(list((self.root / MUSIC).rglob("*.mp3")), [])
+
+    def test_readonly_reasons_cover_unsigned_mismatch_and_usb_failures(self):
+        import system
+        from library import readonly_explanation, readonly_log_detail, readonly_message
+        info = self.root / "iPod_Control/Device/SysInfoExtended"
+        # 1. Wrong GUID stored on device -> guid_mismatch
+        info.write_bytes(plistlib.dumps({"FireWireGUID": 0x1122334455667788}))
+        mismatch = Device.open(self.root)
+        self.assertEqual((mismatch.guid, mismatch.readonly_reason, mismatch.guid_candidates), (None, "guid_mismatch", 1))
+        self.assertIn("校验不匹配", readonly_message(mismatch))
+        self.assertIn("iTunes", readonly_explanation(mismatch))
+        # 2. Volume root without SysInfo: no hardware ids vs non-Apple USB disk
+        info.unlink()
+        with patch.object(system, "is_volume_root", return_value=True):
+            with patch.object(system, "volume_ids", return_value=()):
+                no_hw = Device.open(self.root)
+            self.assertEqual(no_hw.readonly_reason, "no_hardware_id")
+            self.assertIn("硬件标识", readonly_message(no_hw))
+            with patch.object(system, "volume_ids", return_value=("DISK:disk4", "USBSTOR\\DISK&VEN_GENERIC")):
+                no_apple = Device.open(self.root)
+            self.assertEqual(no_apple.readonly_reason, "no_apple_usb")
+            self.assertIn("Apple iPod", readonly_message(no_apple))
+            self.assertIn("读卡器", readonly_explanation(no_apple))
+            self.assertIn("原因=no_apple_usb", readonly_log_detail(no_apple))
+            self.assertNotIn(GUID.hex(), readonly_log_detail(no_apple))
+        # 3. Signed model (e.g. classic) with missing signature -> readonly unsigned; unknown scheme -> unsupported
+        info.write_bytes(plistlib.dumps({"ModelNumStr": "MC293"}))
+        raw = bytearray(self.device.original)
+        raw[48:50] = (0).to_bytes(2, "little")
+        (self.root / DB).write_bytes(bytes(raw))
+        unsigned = Device.open(self.root)
+        self.assertEqual((unsigned.writable, unsigned.readonly_reason, unsigned.signature_scheme), (False, "unsigned", 0))
+        self.assertIn("签名", readonly_message(unsigned))
+        with self.assertRaisesRegex(ValueError, "签名状态"):
+            Device.open(self.root, GUID.hex())
+        info.unlink()
+        raw[48:50] = (9).to_bytes(2, "little")
+        (self.root / DB).write_bytes(bytes(raw))
+        other = Device.open(self.root)
+        self.assertEqual((other.writable, other.readonly_reason, other.signature_scheme), (False, "unsupported_signature", 9))
+        self.assertIn("不支持的签名", readonly_message(other))
 
     def test_interruption_before_and_after_commit(self):
         files = [self.audio, FIXTURES / "aac.m4a"]

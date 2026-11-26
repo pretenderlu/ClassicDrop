@@ -47,14 +47,26 @@ use(CURRENT)
 
 PLAYERS = {  # body top, body bottom, edge, screen, wheel, wheel edge, centre button
     "Silver": ("#f3f5f7", "#c6ccd4", "#a3acb7", "#1d2733", "#fbfcfd", "#c3cad3", "#d5dae1"),
+    "White": ("#ffffff", "#e2e6ec", "#b6bfca", "#1d2733", "#eef1f5", "#c8cfd8", "#dde2e8"),
     "Black": ("#45484e", "#191b1f", "#0c0d0f", "#07080a", "#2c2e33", "#4a4d53", "#121316"),
+    "Graphite": ("#5c6068", "#2d3036", "#1a1c20", "#0e1116", "#3a3d44", "#555962", "#22252a"),
+    "Space Gray": ("#727780", "#42464e", "#2b2e34", "#0e1116", "#4a4e56", "#666b74", "#32353b"),
+    "Slate": ("#4e5663", "#272c35", "#16191f", "#0a0d12", "#353b45", "#515968", "#20242b"),
+    "U2": ("#3a3c40", "#17181b", "#090a0c", "#07080a", "#c8232c", "#7e161b", "#141518"),
 }
 ANODISED = {"Blue": "#4a86c8", "Green": "#78b856", "Red": "#c2313b", "Pink": "#e0679b", "Purple": "#8559b8",
-            "Orange": "#ea8730", "Yellow": "#eac53a"}
-SHAPES = {  # width of an 800 tall drawing, corner radius, then the boxes of the screen, the wheel and its button
+            "Orange": "#ea8730", "Yellow": "#eac53a", "Gold": "#c9a857"}
+SHAPES = {  # width of an 800 tall drawing, corner radius, then optional boxes of screen, wheel and centre button
     "classic": (480, 58, (52, 54, 427, 356), (84, 426, 395, 738), (186, 528, 293, 636)),
+    "mini": (450, 72, (74, 62, 376, 314), (82, 414, 368, 700), (176, 508, 274, 606)),
+    "nano1": (360, 44, (50, 52, 310, 276), (62, 412, 298, 648), (140, 490, 220, 570)),
     "nano3": (600, 64, (58, 58, 541, 404), (162, 460, 438, 736), (250, 548, 350, 648)),
     "nano4": (344, 60, (38, 46, 305, 410), (54, 486, 290, 722), (130, 562, 214, 646)),
+    "nano6": (760, 92, (56, 56, 704, 744), None, None),
+    "nano7": (416, 62, (34, 46, 382, 650), None, (166, 686, 250, 770)),
+    "shuffle1": (272, 36, None, (36, 336, 236, 536), (98, 398, 174, 474)),
+    "shuffle2": (720, 80, None, (130, 170, 590, 630), (275, 315, 445, 485)),
+    "shuffle3": (316, 46, None, None, None),
 }
 
 
@@ -77,7 +89,7 @@ def player_image(height, finish=None, shape="classic"):
     colours = _player_colours(finish)
     top, bottom, edge, screen, wheel, wheel_edge, centre = colours or (
         BAR, SIDE, FIELD_LINE, FIELD_LINE, SURFACE, FIELD_LINE, SIDE)
-    w, radius, glass, ring, button = SHAPES[shape]
+    w, radius, glass, ring, button = SHAPES.get(shape, SHAPES["classic"])
     h = 800
     ramp = Image.linear_gradient("L").resize((w, h))
     body = Image.composite(Image.new("RGBA", (w, h), bottom), Image.new("RGBA", (w, h), top), ramp)
@@ -87,16 +99,19 @@ def player_image(height, finish=None, shape="classic"):
     image.paste(body, mask=mask)
     pen = ImageDraw.Draw(image)
     pen.rounded_rectangle((6, 6, w - 7, h - 7), radius=radius, outline=edge, width=12)
-    pen.rounded_rectangle(glass, radius=16, fill=screen)
-    if colours:
-        # A soft reflection across the glass.
-        left, upper, right, lower = glass
-        gloss = Image.new("RGBA", (w, h))
-        ImageDraw.Draw(gloss).polygon(((left, upper), (left + round((right - left) * 0.66), upper),
-                                       (left + round((right - left) * 0.18), lower), (left, lower)), fill=(255, 255, 255, 22))
-        image.alpha_composite(gloss)
-    pen.ellipse(ring, fill=wheel, outline=wheel_edge, width=8)
-    pen.ellipse(button, fill=centre, outline=wheel_edge, width=6)
+    if glass is not None:
+        pen.rounded_rectangle(glass, radius=16, fill=screen)
+        if colours:
+            # A soft reflection across the glass.
+            left, upper, right, lower = glass
+            gloss = Image.new("RGBA", (w, h))
+            ImageDraw.Draw(gloss).polygon(((left, upper), (left + round((right - left) * 0.66), upper),
+                                           (left + round((right - left) * 0.18), lower), (left, lower)), fill=(255, 255, 255, 22))
+            image.alpha_composite(gloss)
+    if ring is not None:
+        pen.ellipse(ring, fill=wheel, outline=wheel_edge, width=8)
+    if button is not None:
+        pen.ellipse(button, fill=centre, outline=wheel_edge, width=6)
     return image.resize((round(height * w / h), height), Image.Resampling.LANCZOS)
 
 

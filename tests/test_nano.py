@@ -71,18 +71,24 @@ class NanoIdentityTests(unittest.TestCase):
         nano = identify(self.root, usb("1263"))
         self.assertEqual((describe(nano), numbers(nano.capabilities.artwork)), ("nano 第 4 代", set(NANO_4_SIZES)))
 
-    def test_other_generations_stay_unnamed(self):
-        for model in ("xA477", "xC027"):  # second and fifth generation: no checksum, and a compressed library
+    def test_all_non_ios_generations_are_identified(self):
+        for model, family, gen in (("xA477", "iPod Nano", "2nd Gen"), ("xC027", "iPod Nano", "5th Gen"),
+                                   ("xA444", "iPod", "5.5th Gen"), ("xD475", "iPod Nano", "7th Gen")):
             (self.info / "SysInfo").write_text(f"ModelNumStr: {model}\n", encoding="utf8")
-            self.assertIsNone(identify(self.root), model)
+            found = identify(self.root)
+            self.assertIsNotNone(found, model)
+            self.assertEqual((found.family, found.generation), (family, gen))
         (self.info / "SysInfo").unlink()
-        for product in ("1260", "1265", "1266", "1267", "1209"):
-            self.assertIsNone(identify(self.root, usb(product)), product)
+        for product, family in (("1260", "iPod Nano"), ("1265", "iPod Nano"), ("1266", "iPod Nano"),
+                                ("1267", "iPod Nano"), ("1209", "iPod"), ("1303", "iPod Shuffle")):
+            found = identify(self.root, usb(product))
+            self.assertIsNotNone(found, product)
+            self.assertEqual(found.family, family)
 
-    def test_windows_usb_nodes_of_both_nanos_can_be_ejected(self):
-        for product in ("1262", "1263"):
+    def test_windows_usb_nodes_of_supported_ipods_can_be_ejected(self):
+        for product in ("1262", "1263", "1265", "1266", "1267", "1209", "1303"):
             self.assertEqual(_ipod_usb_instance((usb(product),)), usb(product))
-        self.assertIsNone(_ipod_usb_instance((usb("1265"),)))
+        self.assertIsNone(_ipod_usb_instance((usb("9999"),)))
 
     def test_each_shape_and_colour_has_its_own_picture(self):
         looks = [("Silver", "nano3"), ("Red", "nano3"), (None, "nano3"), ("Silver", "nano4"), ("Purple", "nano4"),

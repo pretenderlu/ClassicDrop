@@ -1,10 +1,10 @@
-# ClassicDrop 1.6.3
+# ClassicDrop 1.7.0
 
-Windows 与 macOS 下的 iPod classic 原厂曲库工具。面向已经有原厂曲库的 IPC3（2009 年末 160 GB 薄款）。所有日常操作都在本地完成。iPod nano 第 3、4 代使用同一种曲库，也可以读写，但还没有在真机上验证过，见「支持的机型」。支持 Windows 10/11 x64 与 macOS 12+（Apple 芯片和 Intel）；在 Windows 11 ARM64 电脑上以模拟方式运行 x64 版（Windows 10 ARM64 不能运行 x64 程序，不支持）。
+Windows 与 macOS 下的非 iOS 纯音频 iPod 曲库工具。覆盖 iPod classic（已在 2009 年末 160 GB 薄款上真机验证）、iPod video（5/5.5 代）、iPod 1–4 代、iPod mini（1/2 代）、iPod nano（1–7 代）与 iPod shuffle（1–4 代），所有日常操作都在本地完成，见「支持的机型」。支持 Windows 10/11 x64 与 macOS 12+（Apple 芯片和 Intel）；在 Windows 11 ARM64 电脑上以模拟方式运行 x64 版（Windows 10 ARM64 不能运行 x64 程序，不支持）。
 
 ## 安装与更新
 
-从 [Releases](https://github.com/pretenderlu/ClassicDrop/releases) 下载 `ClassicDropSetup-v1.6.3.exe` 并运行。程序装在 `%LOCALAPPDATA%\Programs\ClassicDrop`，安装和卸载都不需要管理员权限。同一页面的 `ClassicDrop-Windows-x64.zip` 是免安装版，解压后运行其中的 ClassicDrop.exe。
+从 [Releases](https://github.com/pretenderlu/ClassicDrop/releases) 下载 `ClassicDropSetup-v1.7.0.exe` 并运行。程序装在 `%LOCALAPPDATA%\Programs\ClassicDrop`，安装和卸载都不需要管理员权限。同一页面的 `ClassicDrop-Windows-x64.zip` 是免安装版，解压后运行其中的 ClassicDrop.exe。
 
 启动后程序会向 GitHub 查询最新的正式版本。窗口右下角有 GitHub 链接、「反馈」和当前版本号。点「反馈」会打开一个小窗口，列出诊断信息（软件版本、Windows 版本、iPod 机型、最近一次报错和最近的运行日志）供先过目，再复制到剪贴板并打开 GitHub 的新建 Issue 页面。运行日志存在 `%LOCALAPPDATA%\ClassicDrop\Logs`，最多 3 个文件、每个 1 MB，会自动轮替。日志里会记录歌曲文件名；设备序列号、FireWire GUID 和设备名称一律不写入，写日志和诊断信息前会被替换成「[已隐藏]」，你的用户文件夹显示为 `~`。点版本号可以查看各个版本的更新记录。有新版本时，版本号旁边会出现一个红点，更新记录里会多出「下载并安装」按钮。点它之后程序下载安装包，核对 GitHub 提供的 SHA-256 校验值，再自动安装并重新打开。正在传歌，或待传列表里还有歌曲时，需要先处理完再更新。也可以随时点「工具与备份 → 检查更新」。下载失败时可以重试，或打开发布页手动下载。查询只访问 GitHub 的发布接口，不上传任何曲库或设备信息。
 
@@ -18,19 +18,22 @@ Windows 与 macOS 下的 iPod classic 原厂曲库工具。面向已经有原厂
 
 ## 支持的机型
 
-| 机型 | 状态 |
-|---|---|
-| iPod classic | 在 2009 年末的 160 GB 薄款上实际使用 |
-| iPod nano 第 3 代（2007 年，宽屏） | 可读写，尚未真机验证 |
-| iPod nano 第 4 代（2008 年，竖长屏） | 可读写，尚未真机验证 |
+| 机型 | 曲库与校验 | 状态 |
+|---|---|---|
+| iPod classic（第 6 / 6.5 / 7 代） | `iTunesDB`（HASH58） | 在 2009 年末 160 GB 薄款上实际使用 |
+| iPod nano 第 3、4 代 | `iTunesDB`（HASH58） | 可读写，尚未真机验证 |
+| iPod video（第 5 / 5.5 代）、iPod 1–4 代、iPod mini（第 1 / 2 代）、iPod nano 第 1、2 代 | `iTunesDB`（无签名） | 可读写，尚未真机验证 |
+| iPod nano 第 5 代 | `iTunesCDB` + SQLite（HASH72） | 可读写，尚未真机验证 |
+| iPod nano 第 6、7 代 | `iTunesCDB` + SQLite（HASHAB） | 可读写，尚未真机验证 |
+| iPod shuffle 第 1–4 代 | `iTunesSD`（v1 / v2）+ `iTunesDB` | 可读写，尚未真机验证 |
 
-nano 第 3、4 代的曲库格式和校验方式与 classic 相同。程序按机型写入各自的封面缩略图：nano 第 3 代与 classic 一样是四种，nano 第 4 代是六种。这些依据来自 iOpenPod 的机型资料，开发时没有这两款真机。连接后，设备卡片会标出「尚未真机验证」。
+程序会按机型写入各自的封面缩略图（黑白屏与 shuffle 自动跳过封面）、按硬件规格决定是否支持 ALAC（不支持 ALAC 的 iPod 1–3 代、mini 第 1 代与 shuffle 第 1–3 代会自动切换为 AAC-LC）。除 iPod classic 外，其余机型依据 iOpenPod 目录与开源协议规范实现，开发时没有真机；连接后，设备卡片会标出「尚未真机验证」。
 
-用 nano 测试时，第一次先传几首歌，弹出后在 iPod 上确认歌曲能看到、能播放、封面正常，再大量传入。每次改动前的曲库索引都会备份在电脑上，退回方法见「工具与备份」。最坏的情况下需要用 iTunes 恢复 iPod，这会清空机内的音乐。nano 能否播放 24 位的 ALAC 没有依据，不确定时在导入预览里选 AAC，或先试一首。
+使用尚未真机验证的机型时，第一次请先传几首歌，弹出后在 iPod 上确认歌曲能看到、能播放、封面（如有）正常，再大量传入。每次改动前的曲库索引（含 SQLite 与 `iTunesSD`）都会自动备份在电脑上，退回方法见「工具与备份」。最坏的情况下需要用 iTunes 恢复 iPod，这会清空机内的音乐。
 
 测试结果欢迎到 [Issues](https://github.com/pretenderlu/ClassicDrop/issues) 反馈。请写明机型和颜色、容量、固件版本，以及歌曲、歌单和封面在 iPod 上是否正常。
 
-其他机型不在支持范围内。nano 第 1、2 代的曲库没有校验，程序会以只读方式打开，可以浏览和导出。nano 第 5 代及以后使用压缩曲库，程序会提示无法打开。
+运行 iOS 的 **iPod touch 全系列** 不使用 U 盘曲库协议，不在支持范围内。
 
 ## 连接与传歌
 

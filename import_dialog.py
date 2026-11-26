@@ -36,7 +36,7 @@ def playlist_targets(snapshot, selected=None):
 
 class ImportDialog(tk.Toplevel):
     def __init__(self, parent, *, on_close, paths=(), initial=(), known=None, device_name="", snapshot=None,
-                 target=None, new_playlist=False):
+                 target=None, new_playlist=False, allow_alac=True):
         super().__init__(parent)
         self.withdraw()
         self.title("导入预览")
@@ -45,7 +45,8 @@ class ImportDialog(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self.cancel)
         self.px = theme.scaler(parent)
         self.known = known or {}
-        self.rows = {s.key: s for s in initial}
+        self.allow_alac = allow_alac
+        self.rows = {s.key: self._fit_song(s) for s in initial}
         self.key_by_iid = {str(s.key): s.key for s in initial}
         self.editing = bool(self.rows)
         self.selected_paths = ()
@@ -65,7 +66,7 @@ class ImportDialog(tk.Toplevel):
         self._layout(target, new_playlist)
         for key, value in self.values.items():
             value.trace_add("write", lambda *_, field=key: self.change_text(field))
-        for song in initial:
+        for song in self.rows.values():
             self._row(song)
         self._first()
         self._ready()
@@ -234,6 +235,16 @@ class ImportDialog(tk.Toplevel):
         Thread(target=worker, daemon=True).start()
         self.timer = self.after(45, self._poll)
 
+    def _fit_song(self, song):
+        """Drop ALAC choices for models whose stock firmware cannot decode ALAC (e.g. shuffle 1-3G, mini 1G)."""
+        if self.allow_alac:
+            return song
+        choices = tuple(c for c in song.choices if c not in ("alac", "alac-fit", "alac-48")) or ("aac",)
+        mode = song.mode if song.mode in choices else choices[0]
+        if (mode, choices) == (song.mode, song.choices):
+            return song
+        return replace(song, mode=mode, choices=choices)
+
     def _poll(self):
         self.timer = None
         try:
@@ -245,6 +256,7 @@ class ImportDialog(tk.Toplevel):
                 songs, errors = data
                 self.errors.extend(errors)
                 for song in songs:
+                    song = self._fit_song(song)
                     key = song.key
                     existing = self.rows.get(key)
                     changed = (existing is None or song.stamp != existing.stamp
@@ -325,6 +337,8 @@ class ImportDialog(tk.Toplevel):
                 lines.append("已补全" + "、".join(missing))
         elif songs:
             lines.append(f"已选 {len(songs)} 首，修改将应用到所选歌曲。")
+        if not self.allow_alac and songs:
+            lines.append("当前机型不支持 ALAC，已自动改用 AAC-LC。")
         if any(s.cue is not None for s in songs):
             lines.append("将按 CUE 自动分轨并转为独立曲目。")
         if any(s.path.suffix.lower() in DSD_FILES for s in songs):

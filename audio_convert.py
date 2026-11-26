@@ -599,7 +599,7 @@ def _verify_cue_duration(expected, encoded, is_last):
         raise ValueError(f"分轨时长未通过校验。预期 {expected:.3f} 秒，转换后为 {encoded.length:.3f} 秒。")
 
 
-def _convert(source, mode, destination, *, song=None, cue=None):
+def _convert(source, mode, destination, *, song=None, cue=None, allow_alac=True):
     if mode not in ("alac", "alac-fit", "alac-48", "aac"):
         raise ValueError("未知的传输格式。")
     audio = source_audio(source)
@@ -617,7 +617,9 @@ def _convert(source, mode, destination, *, song=None, cue=None):
             raise ValueError(f"第 {cue.track_number} 轨的时长无效。")
     suffix = source.suffix.lower()
     if needs_48k_alac(audio):
-        mode = "alac-48"
+        mode = "alac-48" if allow_alac else "aac"
+    elif not allow_alac and mode in ("alac", "alac-fit", "alac-48"):
+        mode = "aac"
     alac_m4a_cue = cue is not None and suffix == ".m4a" and (getattr(info, "codec", "") or "").lower() == "alac"
     if mode in ("alac", "alac-fit") and suffix not in ASK_FORMAT and not alac_m4a_cue:
         raise ValueError("请选择无损音频作为 ALAC 转换源。")
@@ -754,7 +756,7 @@ def _convert(source, mode, destination, *, song=None, cue=None):
 
 
 @contextmanager
-def prepared_files(files, formats, device_root, report, *, reviewed=None):
+def prepared_files(files, formats, device_root, report, *, reviewed=None, allow_alac=True):
     files = tuple(p if isinstance(p, CueKey) else Path(p) for p in files)
     formats = dict(formats or {})
     reviewed = reviewed or {}
@@ -769,12 +771,20 @@ def prepared_files(files, formats, device_root, report, *, reviewed=None):
         if reviewed:
             song = reviewed[item]
             song.check_source()
-            formats.setdefault(item, song.mode)
+            mode = formats.setdefault(item, song.mode)
+            if not allow_alac and mode in ("alac", "alac-fit", "alac-48"):
+                formats[item] = "aac"
         elif isinstance(item, CueKey):
             raise ValueError("CUE 分轨需要通过导入预览确认后传入。")
         elif item.suffix.lower() in READERS:
             try:
-                if needs_48k_alac(source_audio(item)):
+                audio = source_audio(item)
+                if not allow_alac and (
+                        formats.get(item) in ("alac", "alac-fit", "alac-48")
+                        or (item.suffix.lower() == ".m4a" and (getattr(audio.info, "codec", "") or "").lower() == "alac")
+                        or needs_48k_alac(audio)):
+                    formats[item] = "aac"
+                elif needs_48k_alac(audio):
                     formats[item] = "alac-48"
             except Exception as exc:
                 raise ValueError(f"{item.name}\n{exc}") from exc
@@ -809,7 +819,7 @@ def prepared_files(files, formats, device_root, report, *, reviewed=None):
                 else:
                     dest = Path(folder) / f"{index}.m4a"
                     report(f"正在转换 {index}/{len(files)} · {label_name} → {LABELS.get(mode, mode)}")
-                    _convert(source, mode, dest, song=song, cue=cue)
+                    _convert(source, mode, dest, song=song, cue=cue, allow_alac=allow_alac)
                 if song:
                     song.check_source()
                 end = source.stat()

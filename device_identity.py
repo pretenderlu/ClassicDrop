@@ -3,17 +3,64 @@
 from dataclasses import dataclass
 import plistlib
 import re
+from types import SimpleNamespace
 from xml.parsers.expat import ExpatError
 
+import shuffle_db
 import system
 from device_registry import (DEFAULT_DEVICE_REGISTRY, DatabaseChecksum, DeviceEvidence, DeviceIdentifier, EvidenceAuthority,
                              UsbIdentifier, parse_sysinfo, parse_sysinfo_extended)
 
-GENERATIONS = {"6th Gen": "第 6 代", "6.5th Gen": "第 6 代（120 GB）", "7th Gen": "第 7 代",
-               "3rd Gen": "第 3 代", "4th Gen": "第 4 代"}
-FINISHES = {"Silver": "银色", "Black": "黑色", "Blue": "蓝色", "Green": "绿色", "Red": "红色", "Pink": "粉色",
-            "Purple": "紫色", "Orange": "橙色", "Yellow": "黄色"}
-FAMILIES = {"iPod Classic": "iPod classic", "iPod Nano": "iPod nano"}
+GENERATIONS = {
+    "1st Gen": "第 1 代", "2nd Gen": "第 2 代", "3rd Gen": "第 3 代",
+    "4th Gen (mono)": "第 4 代", "4th Gen (photo)": "第 4 代（Photo）", "4th Gen (color)": "第 4 代（彩屏）",
+    "4th Gen": "第 4 代", "5th Gen": "video 第 5 代", "5.5th Gen": "video 第 5.5 代",
+    "6th Gen": "第 6 代", "6.5th Gen": "第 6 代（120 GB）", "7th Gen": "第 7 代",
+}
+FINISHES = {
+    "Silver": "银色", "Black": "黑色", "White": "白色", "Graphite": "深空灰",
+    "Space Gray": "深空灰", "Slate": "炭黑", "Gold": "金色", "U2": "U2 特别版",
+    "Blue": "蓝色", "Green": "绿色", "Red": "红色", "Pink": "粉色",
+    "Purple": "紫色", "Orange": "橙色", "Yellow": "黄色",
+}
+FAMILIES = {
+    "iPod": "iPod",
+    "iPod Classic": "iPod classic",
+    "iPod Mini": "iPod mini",
+    "iPod Nano": "iPod nano",
+    "iPod Shuffle": "iPod shuffle",
+}
+
+# Hardware models whose stock firmware does not decode Apple Lossless (ALAC).
+_NO_ALAC = {
+    ("iPod", "1st Gen"), ("iPod", "2nd Gen"), ("iPod", "3rd Gen"),
+    ("iPod Mini", "1st Gen"),
+    ("iPod Shuffle", "1st Gen"), ("iPod Shuffle", "2nd Gen"),
+    ("iPod Shuffle", "3rd Gen"), ("iPod Shuffle", ""),
+}
+
+_SUPPORTED_CHECKSUMS = {
+    DatabaseChecksum.NONE,
+    DatabaseChecksum.HASH58,
+    DatabaseChecksum.HASH72,
+    DatabaseChecksum.HASHAB,
+}
+
+
+def _shuffle_capabilities(sd_version):
+    db = SimpleNamespace(
+        checksum=DatabaseChecksum.NONE,
+        supports_compressed_database=False,
+        uses_sqlite_database=False,
+        sqlite_checksum=DatabaseChecksum.NONE,
+        sd_version=sd_version,
+    )
+    art = SimpleNamespace(
+        cover_formats=(),
+        artwork_root_value=None,
+        supports_sparse_artwork=False,
+    )
+    return SimpleNamespace(database=db, artwork=art)
 
 
 @dataclass(frozen=True)
@@ -29,13 +76,34 @@ class Player:
     @property
     def shape(self):
         """Which outline to draw for it."""
-        return {("iPod Nano", "3rd Gen"): "nano3", ("iPod Nano", "4th Gen"): "nano4"}.get(
-            (self.family, self.generation), "classic")
+        if self.family == "iPod Mini":
+            return "mini"
+        if self.family == "iPod Shuffle":
+            return {"1st Gen": "shuffle1", "3rd Gen": "shuffle3"}.get(self.generation, "shuffle2")
+        if self.family == "iPod Nano":
+            return {
+                "1st Gen": "nano1", "2nd Gen": "nano1",
+                "3rd Gen": "nano3",
+                "4th Gen": "nano4", "5th Gen": "nano4",
+                "6th Gen": "nano6",
+                "7th Gen": "nano7",
+            }.get(self.generation, "nano4")
+        return "classic"
 
     @property
     def proven(self):
         """Only the classic has been used with this program on real hardware."""
         return self.family == "iPod Classic"
+
+    @property
+    def supports_alac(self):
+        """Whether stock firmware on this model decodes Apple Lossless (ALAC)."""
+        return (self.family, self.generation) not in _NO_ALAC
+
+    @property
+    def supports_covers(self):
+        """Whether this model has a colour screen and native ArtworkDB cover thumbnails."""
+        return bool(self.capabilities.artwork.cover_formats)
 
     @property
     def name(self):
@@ -86,10 +154,20 @@ def _device_files(root, files=None):
 
 
 def _supported(capabilities):
-    """This program writes a plain iTunesDB signed with HASH58: the classic and the nano of 2007 and 2008."""
-    database = capabilities.database
-    return (database.checksum is DatabaseChecksum.HASH58 and not database.supports_compressed_database
-            and not database.uses_sqlite_database)
+    """Every non-iOS mass-storage iPod family in the catalog is supported."""
+    return capabilities.database.checksum in _SUPPORTED_CHECKSUMS
+
+
+def _compat_key(profile):
+    db = profile.capabilities.database
+    return (
+        profile.capabilities.artwork,
+        db.checksum,
+        db.supports_compressed_database,
+        db.uses_sqlite_database,
+        db.sqlite_checksum,
+        (profile.family, profile.generation) not in _NO_ALAC,
+    )
 
 
 def _resolve(evidence):
@@ -104,21 +182,24 @@ def _resolve(evidence):
     candidates = result.candidates
     if not candidates or len({c.family for c in candidates}) != 1:
         return None
-    first = candidates[0].capabilities
-    if not _supported(first) or any((c.capabilities.artwork, c.capabilities.database) != (first.artwork, first.database)
-                                    for c in candidates):
+    first = candidates[0]
+    if not _supported(first.capabilities) or any(_compat_key(c) != _compat_key(first) for c in candidates):
         return None
     generations = {c.generation for c in candidates}
-    return Player(candidates[0].family, generations.pop() if len(generations) == 1 else "", "", first)
+    return Player(first.family, generations.pop() if len(generations) == 1 else "", "", first.capabilities)
 
 
 def identify(root, usb=None, *, files=None):
-    """What this iPod is, or None when that cannot be told or it is a model this program does not write.
+    """What this iPod is, or None when that cannot be told or it is an unsupported device.
 
-    usb is the Windows instance name of the Apple USB device the volume belongs to, or any true value for
+    usb is the Windows/macOS instance name of the Apple USB device the volume belongs to, or any true value for
     a USB connection whose instance is unknown.
     """
     try:
+        shuf = shuffle_db.detect_shuffle(root, usb)
+        if shuf is not None:
+            generation, sd_version = shuf
+            return Player("iPod Shuffle", generation, "", _shuffle_capabilities(sd_version))
         hardware = DeviceEvidence()
         if usb and system.WINDOWS and system.is_volume_root(root):
             try:
@@ -138,13 +219,15 @@ def identify(root, usb=None, *, files=None):
 
 
 def describe(player):
-    """Short Chinese label such as 第 7 代 · 银色 or nano 第 4 代 · 紫色."""
+    """Short Chinese label such as 第 7 代 · 银色, video 第 5.5 代 · 黑色 or nano 第 7 代 · 深空灰."""
     if not player:
         return ""
     generation = GENERATIONS.get(player.generation, player.generation)
     # The classic is the default subject of the program, so its family is only named when nothing else is known.
     if player.family == "iPod Classic":
         model = generation or player.name
+    elif player.family == "iPod":
+        model = generation if generation.startswith("video") else f"iPod {generation}".strip()
     else:
         model = f"{player.name.removeprefix('iPod ')} {generation}".strip()
     return " · ".join(p for p in (model, FINISHES.get(player.finish, player.finish)) if p)

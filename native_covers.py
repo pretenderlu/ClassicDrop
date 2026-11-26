@@ -16,7 +16,7 @@ cpuarch.import_wasmtime()
 from iPodDB.ArtworkDB.parser.parse_ArtworkDB import parse_ArtworkDB
 from iPodDB.ArtworkDB.shared.chunk_defs.mhif import MhifHeader
 from iPodDB.library import (ArtworkAsset, ArtworkPixels, CoverFormat, CoverPixelFormat, FileDependency, SourceFile,
-                            WriteChecksum, WriteResources, WriteTarget, content_chunks, content_sha256)
+                            WriteResources, content_chunks, content_sha256)
 from library import MAX_DB, STAGE, fingerprint, inside, prepared_database, write_file
 from music_import import picture_data, thumbnail
 
@@ -30,26 +30,58 @@ def cover_formats(artwork):
                  for f in artwork.cover_formats)
 
 
-# The classic and the third generation nano keep the same four thumbnails. The fourth generation nano keeps six.
+# Reference artwork layouts across every colour-screen iPod generation.
+PHOTO_4 = DEFAULT_DEVICE_REGISTRY.profile_for_model_number("M9585").capabilities.artwork
+VIDEO_5 = DEFAULT_DEVICE_REGISTRY.profile_for_model_number("MA002").capabilities.artwork
+NANO_1 = DEFAULT_DEVICE_REGISTRY.profile_for_model_number("MA004").capabilities.artwork
 CLASSIC = DEFAULT_DEVICE_REGISTRY.profile_for_model_number("MC293").capabilities.artwork
 NANO_4 = DEFAULT_DEVICE_REGISTRY.profile_for_model_number("MB754").capabilities.artwork
+NANO_5 = DEFAULT_DEVICE_REGISTRY.profile_for_model_number("MC027").capabilities.artwork
+NANO_6 = DEFAULT_DEVICE_REGISTRY.profile_for_model_number("MC525").capabilities.artwork
+NANO_7 = DEFAULT_DEVICE_REGISTRY.profile_for_model_number("MD475").capabilities.artwork
+ALL_LAYOUTS = (CLASSIC, NANO_4, VIDEO_5, NANO_1, PHOTO_4, NANO_5, NANO_6, NANO_7)
 FORMATS = cover_formats(CLASSIC)
-# Each thumbnail number has one geometry, so reading can accept every layout without knowing the model.
-KNOWN_FORMATS = tuple({f.format_id: f for f in (*FORMATS, *cover_formats(NANO_4))}.values())
+# Format ID 1016 is 140x140 on 4G Photo and 57x57 on Nano 7G; _readable_formats picks per-device first.
+KNOWN_FORMATS = tuple({f.format_id: f for layout in (CLASSIC, NANO_4, VIDEO_5, NANO_1, NANO_5, NANO_6, PHOTO_4, NANO_7)
+                       for f in cover_formats(layout)}.values())
+
+
+def _readable_formats(device):
+    """Cover formats ordered for decoding thumbnails on this device without ID 1016 ambiguity."""
+    by_id = {}
+    player = device.profile
+    if player and player.capabilities.artwork.cover_formats:
+        for fmt in cover_formats(player.capabilities.artwork):
+            by_id[fmt.format_id] = fmt
+    order = ((CLASSIC, NANO_4, NANO_5, NANO_6, NANO_7, VIDEO_5, NANO_1, PHOTO_4)
+             if getattr(device, "is_cdb", False)
+             else (CLASSIC, NANO_4, VIDEO_5, NANO_1, PHOTO_4, NANO_5, NANO_6, NANO_7))
+    for layout in order:
+        for fmt in cover_formats(layout):
+            by_id.setdefault(fmt.format_id, fmt)
+    return tuple(by_id.values())
 
 
 def cover_layout(device, declared=frozenset()):
-    """The artwork rules for writing covers to this iPod.
+    """The artwork rules for writing covers to this iPod, or None for monochrome/screenless models.
 
     The identified model decides. For an unidentified one, declared, the thumbnail numbers its own index
-    already lists, tells a fourth generation nano from the rest.
+    already lists, matches against known layouts.
     """
+    if getattr(device, "shuffle_version", 0):
+        return None
     player = device.profile
-    if player and player.capabilities.artwork.cover_formats:
-        return player.capabilities.artwork
-    nano = {f.format_id for f in NANO_4.cover_formats}
-    if declared and declared <= nano and not declared <= {f.format_id for f in FORMATS}:
-        return NANO_4
+    if player is not None:
+        return player.capabilities.artwork if player.capabilities.artwork.cover_formats else None
+    if declared:
+        # Prefer exact subset match (checking CLASSIC first preserves existing unnamed-device rules).
+        candidates = (NANO_5, NANO_6, NANO_7) if getattr(device, "is_cdb", False) else ALL_LAYOUTS
+        for layout in candidates:
+            ids = {f.format_id for f in layout.cover_formats}
+            if declared <= ids:
+                return layout
+    if getattr(device, "is_cdb", False):
+        return NANO_5
     return CLASSIC
 
 
@@ -67,13 +99,14 @@ def device_covers(device):
     Returns the small pictures, read now, and the locations of the large ones for reading on demand.
     """
     small, large, shards = {}, {}, {}
+    formats = _readable_formats(device)
     try:
         index = inside(device.root, ART_DB)
         if not index.is_file() or not 0 < index.stat().st_size <= MAX_DB:
             return small, large
         library = device.library.with_artwork(index.read_bytes())
         for artwork_id in {t.artwork_id for t in library.snapshot.tracks}:
-            read = library.artwork_read(artwork_id, KNOWN_FORMATS, 128)
+            read = library.artwork_read(artwork_id, formats, 128)
             if not read:
                 continue
             try:
@@ -85,7 +118,7 @@ def device_covers(device):
                 small[artwork_id] = Image.frombytes("RGB", (pixels.width, pixels.height), pixels.rgb888)
             except (OSError, ValueError):
                 continue
-            sharp = library.artwork_read(artwork_id, KNOWN_FORMATS, 320)
+            sharp = library.artwork_read(artwork_id, formats, 320)
             if sharp and sharp != read:
                 large[artwork_id] = sharp
     except Exception:
@@ -146,10 +179,11 @@ class CoverWrite:
     files: dict
     records: list
     count: int
+    sqlite: object = None
 
 
-def prepare_covers(device, additions, desired, paths, stack, report):
-    if not paths:
+def prepare_covers(device, additions, desired, paths, stack, report, *, sqlite_sources=()):
+    if not paths or cover_layout(device) is None:
         return None, 0
     prefetched = {}
     if additions:
@@ -194,13 +228,14 @@ def prepare_covers(device, additions, desired, paths, stack, report):
     declared = ({row.chunk.header.format_id for row in parse_ArtworkDB(original).find_chunks(MhifHeader)}
                 if original else set())
     layout = cover_layout(device, declared)
+    if layout is None:
+        return None, 0
     formats = cover_formats(layout)
     if declared:
         formats = tuple(f for f in formats if f.format_id in declared)
         if not formats:
             raise ValueError("设备封面库使用的格式与这台 iPod 不匹配。")
-    target = WriteTarget(checksum=WriteChecksum.HASH58, firewire_guid=device.guid, cover_formats=formats,
-                         artwork_root_value=layout.artwork_root_value, supports_sparse_artwork=layout.supports_sparse_artwork)
+    target = device.write_target(cover_formats=formats, artwork=layout)
     if Path(tempfile.gettempdir()).resolve().is_relative_to(device.root):
         raise ValueError("处理封面需要电脑上的临时目录。")
     names = {name.casefold(): name for name in library.artwork_file_paths()}
@@ -226,7 +261,8 @@ def prepare_covers(device, additions, desired, paths, stack, report):
         inventory[name.casefold()] = dep
         sources.append(SourceFile(dep, buf))
     resources = WriteResources(artwork=tuple(assets.values()), files=tuple(sources),
-                               file_inventory=tuple(inventory.values()), create_file_buffer=lambda: _Buffer(stack))
+                               file_inventory=tuple(inventory.values()), create_file_buffer=lambda: _Buffer(stack),
+                               sqlite_sources=tuple(sqlite_sources))
     result = prepared_database(replace(device, library=library), additions, replace(desired, tracks=tuple(tracks)),
                                target=target, resources=resources)
     if result.artwork is None or any(t.artwork_id and out.artwork_id <= 0
@@ -242,7 +278,7 @@ def prepare_covers(device, additions, desired, paths, stack, report):
     for path, data in files.items():
         old = inventory.get(path.casefold())
         records.append([path, old.size if old else 0, old.sha256 if old else None, content_sha256(data)])
-    return CoverWrite(result.itunes, original, files, records, updated), missing
+    return CoverWrite(result.itunes, original, files, records, updated, sqlite=result.sqlite), missing
 
 
 def publish_covers(device, covers):

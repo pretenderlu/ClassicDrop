@@ -29,8 +29,9 @@ import mac_update
 from import_dialog import AUDIO_TYPES, ImportDialog, NewPlaylist, playlist_targets
 from ratings import RatingMixin
 import theme
-from library import (DB, Device, editable_playlist, is_music, listening, move_playlist_entries, playlist_edit, rename_device,
-                     rename_playlist)
+from library import (CDB, DB, SD, UNSIGNABLE_REASONS, Device, editable_playlist, is_music, listening,
+                     move_playlist_entries, playlist_edit, readonly_explanation, readonly_log_detail, readonly_message,
+                     rename_device, rename_playlist)
 from native_covers import device_covers, load_cover
 from transfer import STAGE, export_tracks, recover_interrupted, transfer
 from updates import PROJECT_URL, Release, check_for_updates, download_update, issue_url, plain_notes, release_history, version_key
@@ -43,8 +44,16 @@ SETTINGS = BACKUPS.with_name("settings.json")
 MOD = system.MOD
 
 
+def _has_library(path):
+    return (path / DB).is_file() or (path / CDB).is_file() or (path / SD).is_file()
+
+
 def discover():
-    return [d for d in system.volumes() if (d / DB).is_file()]
+    return [d for d in system.volumes() if _has_library(d)]
+
+
+def _guid_hex(dev):
+    return dev.guid.hex() if dev and dev.guid else None
 
 
 def _disabled(window):
@@ -150,6 +159,7 @@ class App(RatingMixin):
         self.device_model = tk.Label(card, bg=theme.SURFACE, fg=theme.MUTED, font=(theme.FONT, 8), anchor="w", justify="left")
         self.device_model.grid(row=2, column=1, sticky="new", padx=px(10, 10), pady=px(2, 0))
         self.device_badge = tk.Label(state, font=(theme.FONT, 8), padx=px(6), pady=px(1))
+        self.device_badge.bind("<Button-1>", lambda _: self.explain_readonly())
         self.device_info = tk.Label(state, bg=theme.SURFACE, fg=theme.MUTED, font=(theme.FONT, 9))
         self.device_info.pack(side="left")
         self.capacity = tk.Frame(card, bg=theme.SURFACE)
@@ -414,7 +424,7 @@ class App(RatingMixin):
         self.window.after(65, self._poll)
 
     def _buttons(self):
-        writable = self.device and self.device.guid and not self.busy
+        writable = self.device and self.device.writable and not self.busy
         self.eject_button.configure(state="normal" if self.device and self.device.usb_instance and not self.busy else "disabled")
         allowed = writable and self.pending
         self.send_button.configure(text=f"传入 iPod  ({len(self.pending)})" if self.pending else "传入 iPod",
@@ -440,7 +450,7 @@ class App(RatingMixin):
     def _refresh(self, after=None):
         if self.busy:
             return
-        if self.device and self.device.root.is_dir() and (self.device.root / DB).is_file():
+        if self.device and self.device.root.is_dir() and _has_library(self.device.root):
             self.load(self.device.root, after_load=after)
         else:
             self.device = None
@@ -498,7 +508,7 @@ class App(RatingMixin):
         same_guid = guid is None or (old is not None and old.guid is not None and guid.lower() == old.guid.hex())
         light = not reload_covers and same_guid and old is not None and old.root == resolved
         # Keep the same read-only view available if a manually entered GUID fails.
-        if not (guid and old and not old.guid and old.root == resolved):
+        if not (guid and old and not old.writable and old.root == resolved):
             self.device = None
         self._buttons()
         side = self.px(40)
@@ -541,8 +551,8 @@ class App(RatingMixin):
             if not status and device.profile and not device.profile.proven:
                 message = (f"已读取 {device.profile.name} 的曲库。这个机型尚未经真机验证，"
                            "每次改动前的曲库都会备份在电脑上，传歌后请在 iPod 上核对。")
-            if not device.guid:
-                message = "当前为只读。可以浏览、导出，或在「工具与备份」填写设备 GUID。"
+            if not device.writable:
+                message = readonly_message(device)
             if (device.root / STAGE).exists():
                 message += " 检测到中断记录，请先点「工具与备份 → 恢复中断操作」。"
             self.status.set(message)
@@ -550,6 +560,11 @@ class App(RatingMixin):
                 after_load()
         self.render(keep_view=True)
         self._work("正在读取 iPod 曲库…", read, loaded)
+
+    def explain_readonly(self):
+        dev = self.device
+        if dev and not dev.writable:
+            messagebox.showinfo("当前为只读", readonly_explanation(dev), parent=self.window)
 
     def _hide_device(self, dev):
         """The serial, FireWire GUID and device name must never reach the log or the feedback report."""
@@ -560,7 +575,11 @@ class App(RatingMixin):
         if dev.guid:
             values.append(dev.guid.hex())
         diagnostics.hide(*values)
-        diagnostics.log.info("已识别设备：%s", describe(dev.profile) or "未知机型")
+        model = describe(dev.profile) or "未知机型"
+        if getattr(dev, "writable", bool(dev.guid)):
+            diagnostics.log.info("已识别设备：%s（可写入）", model)
+        else:
+            diagnostics.log.info("已识别设备：%s（只读，%s）", model, readonly_log_detail(dev))
 
     def navigate(self, _):
         chosen = self.nav.selection()
@@ -753,8 +772,9 @@ class App(RatingMixin):
         if dev:
             on_drive = system.is_volume_root(dev.root)
             self.device_info.configure(text=dev.root.drive if on_drive and system.WINDOWS else dev.root.name)
-            self.device_badge.configure(text="可写入" if dev.guid else "只读", bg=theme.OK_FILL if dev.guid else theme.WARN_FILL,
-                                        fg=theme.OK_TEXT if dev.guid else theme.WARN_TEXT)
+            self.device_badge.configure(text="可写入" if dev.writable else "只读", bg=theme.OK_FILL if dev.writable else theme.WARN_FILL,
+                                        fg=theme.OK_TEXT if dev.writable else theme.WARN_TEXT,
+                                        cursor="" if dev.writable else "hand2")
             self.device_badge.pack(side="left", padx=self.px(0, 6), before=self.device_info)
             usage = self.usage
         else:
@@ -767,7 +787,7 @@ class App(RatingMixin):
         else:
             self.capacity.grid_remove()
         lists = list(snap.playlists) if snap else []
-        targets = playlist_targets(snap if dev and dev.guid else None, self.queue_target)
+        targets = playlist_targets(snap if dev and dev.writable else None, self.queue_target)
         self.target_keys = [key for key, _ in targets]
         self.target.configure(values=[label for _, label in targets])
         if snap and self.queue_target not in self.target_keys:
@@ -927,14 +947,15 @@ class App(RatingMixin):
         if self.busy or _disabled(self.window) or not (paths or initial):
             return
         dev = self.device
-        writable = dev and dev.guid
+        writable = dev and dev.writable
         system.WINDOWS and self.window.attributes("-disabled", True)
         try:
             ImportDialog(self.window, on_close=lambda result: self._finish_preview(initial, result),
                          paths=paths, initial=initial, known=self.pending, target=self.queue_target, new_playlist=new_playlist,
                          snapshot=dev.library.snapshot if dev else None,
                          device_name=(dev.library.snapshot.device_name or (dev.profile.name if dev.profile else "iPod classic"))
-                         if writable else "")
+                         if writable else "",
+                         allow_alac=dev.supports_alac if dev else True)
         except Exception:
             system.WINDOWS and self.window.attributes("-disabled", False)
             raise
@@ -976,7 +997,7 @@ class App(RatingMixin):
 
     def _send(self, batch=None, *, previous_target=None):
         dev, reviewed, target = self.device, self.pending.copy() if batch is None else batch, self.queue_target
-        if not dev or not dev.guid or not reviewed or self.busy:
+        if not dev or not dev.writable or not reviewed or self.busy:
             return
         new_name = target.name if isinstance(target, NewPlaylist) else None
         def done(result):
@@ -996,7 +1017,7 @@ class App(RatingMixin):
                 self.queue_target = previous_target if self.pending and previous_target != target else saved
                 self.view = saved if saved is not None else "library"
                 self.render()
-            self.load(dev.root, dev.guid.hex(), message + "可以安全弹出设备。", show_target)
+            self.load(dev.root, _guid_hex(dev), message + "可以安全弹出设备。", show_target)
         formats = {p: s.mode for p, s in reviewed.items()}
         self._work("准备传歌…", lambda report: transfer(dev, tuple(reviewed), BACKUPS, report, reviewed=reviewed,
                                                     formats=formats, playlist_id=target if new_name is None else None,
@@ -1008,14 +1029,14 @@ class App(RatingMixin):
             self.status.set("没有需要保存的改动。")
             return
         self._work("正在保存曲库…", lambda report: transfer(dev, [], BACKUPS, report, desired=desired),
-                   lambda _: self.load(dev.root, dev.guid.hex(), message, after_load, reload_covers=False))
+                   lambda _: self.load(dev.root, _guid_hex(dev), message, after_load, reload_covers=False))
 
     def change_device_name(self):
         self._flush_ratings(self._change_device_name)
 
     def _change_device_name(self):
         dev = self.device
-        if self.busy or not dev or not dev.guid:
+        if self.busy or not dev or not dev.writable:
             return
         snap = dev.library.snapshot
         name = simpledialog.askstring("修改设备名称", "iPod 原厂曲库中的设备名称",
@@ -1036,14 +1057,14 @@ class App(RatingMixin):
 
     def _repair_covers(self):
         dev = self.device
-        if self.busy or not dev or not dev.guid:
+        if self.busy or not dev or not dev.writable or not dev.supports_covers:
             return
         def done(result):
             count, missing, _ = result
             message = f"已补齐 {count} 首歌曲的设备封面。" if count else "设备封面已核对。"
             if missing:
                 message += f"{missing} 首歌曲没有可读取的内嵌封面。"
-            self.load(dev.root, dev.guid.hex(), message + "可以安全弹出设备。")
+            self.load(dev.root, _guid_hex(dev), message + "可以安全弹出设备。")
         self._work("正在检查原厂封面…", lambda report: transfer(dev, (), BACKUPS, report, repair_covers=True), done)
 
     def delete_music(self, *, all_music=False):
@@ -1051,7 +1072,7 @@ class App(RatingMixin):
 
     def _delete_music(self, *, all_music=False):
         dev = self.device
-        if self.busy or not dev or not dev.guid or (not all_music and self.view == "queue"):
+        if self.busy or not dev or not dev.writable or (not all_music and self.view == "queue"):
             return
         snap = dev.library.snapshot
         tracks = ([t for t in snap.tracks if is_music(t)] if all_music else self.selected())
@@ -1075,13 +1096,13 @@ class App(RatingMixin):
                 return
         message = f"已从 iPod 删除 {len(ids)} 首音乐。" if not all_music else f"音乐库已清空，共删除 {len(ids)} 首音乐。"
         self._work("正在整理曲库与音频…", lambda report: transfer(dev, [], BACKUPS, report, remove_ids=ids),
-                   lambda _: self.load(dev.root, dev.guid.hex(), message, reload_covers=False))
+                   lambda _: self.load(dev.root, _guid_hex(dev), message, reload_covers=False))
 
     def change_playlist(self, playlist_id=None, remove=False):
         self._flush_ratings(lambda: self._change_playlist(playlist_id, remove))
 
     def _change_playlist(self, playlist_id=None, remove=False):
-        if self.busy or not self.device or not self.device.guid:
+        if self.busy or not self.device or not self.device.writable:
             return
         name = None
         if playlist_id is None:
@@ -1107,7 +1128,7 @@ class App(RatingMixin):
         self._save(desired, "歌单已保存到 iPod。", show_new if name is not None else None)
 
     def playlist_menu(self):
-        if self.busy or not self.device or not self.device.guid or not self.selected():
+        if self.busy or not self.device or not self.device.writable or not self.selected():
             return
         menu = tk.Menu(self.window, tearoff=False)
         for playlist in self.device.library.snapshot.playlists:
@@ -1132,7 +1153,7 @@ class App(RatingMixin):
 
     def _manage_list(self, action):
         dev = self.device
-        if self.busy or not dev or not dev.guid or self.view not in self.target_keys:
+        if self.busy or not dev or not dev.writable or self.view not in self.target_keys:
             return
         snap = dev.library.snapshot
         playlist = next(p for p in snap.playlists if p.playlist_id == self.view)
@@ -1141,7 +1162,7 @@ class App(RatingMixin):
                                    default="no", parent=self.window):
                 self._work("正在删除播放列表…",
                            lambda report: transfer(dev, (), BACKUPS, report, delete_playlist_id=playlist.playlist_id),
-                           lambda _: self.load(dev.root, dev.guid.hex(), "播放列表已删除，歌曲已保留。", reload_covers=False))
+                           lambda _: self.load(dev.root, _guid_hex(dev), "播放列表已删除，歌曲已保留。", reload_covers=False))
             return
         try:
             if action == "rename":
@@ -1166,7 +1187,7 @@ class App(RatingMixin):
 
     def _edit_tags(self):
         tracks = self.selected()
-        if self.busy or not self.device or not self.device.guid or self.view == "queue" or not tracks:
+        if self.busy or not self.device or not self.device.writable or self.view == "queue" or not tracks:
             return
         if len(tracks) > 1:
             ids = {t.track_id for t in tracks}
@@ -1197,7 +1218,7 @@ class App(RatingMixin):
     def rate(self, rating):
         """Give the selected songs this rating, from 0 to 100. Saving also merges what the iPod recorded."""
         dev, tracks = self.device, self.selected()
-        if self.busy or not dev or not dev.guid or not tracks or self.view == "queue":
+        if self.busy or not dev or not dev.writable or not tracks or self.view == "queue":
             return
         ratings = {**self.pending_ratings, **{t.track_id: rating for t in tracks}}
         self.pending_ratings = {}
@@ -1218,7 +1239,7 @@ class App(RatingMixin):
             return
         menu = tk.Menu(self.window, tearoff=False)
         selected = self.selected()
-        writable = self.device is not None and self.device.guid is not None
+        writable = self.device is not None and self.device.writable
         if self.view == "queue":
             menu.add_command(label="从待传列表移除", command=self.remove_pending, state="normal" if selected else "disabled")
         else:
@@ -1252,12 +1273,13 @@ class App(RatingMixin):
     def tools_menu(self):
         menu = tk.Menu(self.window, tearoff=False)
         dev = self.device
-        writable = dev and dev.guid and not self.busy
+        writable = dev and dev.writable and not self.busy
         music_state = "normal" if writable and any(map(is_music, dev.library.snapshot.tracks)) else "disabled"
+        cover_state = "normal" if music_state == "normal" and dev.supports_covers else "disabled"
         menu.add_command(label="修改设备名称", accelerator="F2", command=self.change_device_name,
                          state="normal" if writable else "disabled")
         menu.add_command(label="清空音乐库", command=lambda: self.delete_music(all_music=True), state=music_state)
-        menu.add_command(label="补齐设备封面", command=self.repair_covers, state=music_state)
+        menu.add_command(label="补齐设备封面", command=self.repair_covers, state=cover_state)
         menu.add_separator()
         menu.add_command(label="打开电脑上的曲库索引备份", state="normal" if BACKUPS.is_dir() else "disabled",
                          command=lambda: system.open_folder(BACKUPS))
@@ -1265,14 +1287,16 @@ class App(RatingMixin):
             value = simpledialog.askstring("设备校验", "输入这台 iPod 的 16 位十六进制 FireWire GUID", parent=self.window)
             if value:
                 self.load(dev.root, value.strip())
+        can_enter_guid = (dev and not dev.writable and getattr(dev, "readonly_reason", "") not in UNSIGNABLE_REASONS
+                          and not self.busy)
         menu.add_command(label="填写设备 GUID", command=enter_guid,
-                         state="normal" if dev and not dev.guid and not self.busy else "disabled")
+                         state="normal" if can_enter_guid else "disabled")
         menu.add_command(label="Apple 编码器", command=self.apple_encoders,
                          state="disabled" if self.busy else "normal")
         menu.add_command(label="恢复中断操作",
                          command=lambda: self._work("核对中断记录…", lambda _: recover_interrupted(dev, BACKUPS),
-                                                    lambda _: self.load(dev.root, dev.guid.hex(), "中断记录已处理。")),
-                         state="normal" if dev and dev.guid and (dev.root / STAGE).is_dir() and not self.busy else "disabled")
+                                                    lambda _: self.load(dev.root, _guid_hex(dev), "中断记录已处理。")),
+                         state="normal" if dev and dev.writable and (dev.root / STAGE).is_dir() and not self.busy else "disabled")
         menu.add_separator()
         looks = tk.Menu(menu, tearoff=False)
         self.theme_choice = tk.StringVar(self.window, theme.CURRENT)

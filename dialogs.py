@@ -8,8 +8,9 @@ import theme
 
 def help_text(backups_dir):
     return (
-        "适用于 Windows 与 macOS 可读取的 iPod classic 原厂曲库。iPod nano 第 3、4 代使用同一种曲库，也可以读写，"
-        "但尚未经真机验证。\n\n"
+        "适用于 Windows 与 macOS 可读取的非 iOS 纯音频 iPod 家族：iPod classic（已真机验证）、"
+        "iPod video（5/5.5 代）、iPod 1–4 代、iPod mini（1/2 代）、iPod nano（1–7 代）及 iPod shuffle（1–4 代）。"
+        "除 iPod classic 外其余机型尚未经真机验证，首次使用请先传几首确认。\n\n"
         "拖入歌曲、CUE 整轨或整个文件夹，在「导入预览」核对歌名、歌手、专辑和封面，也可多选一起修改。"
         "支持 MP3、M4A、FLAC、WAV、APE、WV、TTA、AIFF、DSF、DFF 以及 CUE 自动分轨。"
         "超过 24 位或 48 kHz 的音源和 DSF、DFF 统一转为 24 位 / 48 kHz ALAC。点「确认传入 iPod」，或先加入待传。"
