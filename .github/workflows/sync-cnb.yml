@@ -1,0 +1,94 @@
+name: Sync to CNB
+
+# 自动将主分支、版本标签与正式发布的 GitHub Release（含全部安装包附件）同步到腾讯云 CNB 镜像仓。
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  release:
+    types: [published, edited]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要同步的 Release 标签（留空同步最新正式版，填 none 仅同步代码和标签）"
+        required: false
+        default: ""
+        type: string
+      overwrite:
+        description: "强制覆盖 CNB 上已存在的同名附件"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-cnb
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: ${{ github.repository == 'pretenderlu/ClassicDrop' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CNB_TOKEN: ${{ secrets.CNB }}
+      CNB_REPO: pretenderlu/ClassicDrop
+    steps:
+      - name: Check CNB token
+        id: check
+        run: |
+          if [ -z "$CNB_TOKEN" ]; then
+            echo "::warning::Secret CNB is not configured; skipping CNB mirror sync."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout repository
+        if: steps.check.outputs.enabled == 'true'
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Sync Git main branch and tags to CNB
+        if: steps.check.outputs.enabled == 'true'
+        run: |
+          git fetch origin +refs/heads/main:refs/remotes/origin/main --tags --force
+          askpass=$(mktemp)
+          trap 'rm -f "$askpass"' EXIT
+          cat > "$askpass" <<'EOF'
+          #!/usr/bin/env sh
+          case "$1" in
+            *Username*) printf '%s\n' "cnb" ;;
+            *) printf '%s\n' "$CNB_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$askpass"
+          GIT_TERMINAL_PROMPT=0 GIT_ASKPASS="$askpass" git push --force \
+            "https://cnb.cool/${CNB_REPO}.git" \
+            refs/remotes/origin/main:refs/heads/main \
+            "refs/tags/v*:refs/tags/v*"
+
+      - name: Sync published Release and assets to CNB
+        if: |
+          steps.check.outputs.enabled == 'true' && (
+            github.event_name == 'release' ||
+            (github.event_name == 'workflow_dispatch' && inputs.tag != 'none')
+          )
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SYNC_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+          SYNC_OVERWRITE: ${{ github.event_name == 'workflow_dispatch' && inputs.overwrite && '1' || '' }}
+        run: |
+          args=()
+          if [ -n "$SYNC_TAG" ]; then
+            args+=(--tag "$SYNC_TAG")
+          fi
+          if [ -n "$SYNC_OVERWRITE" ]; then
+            args+=(--overwrite)
+          fi
+          python3 tools/sync_cnb_release.py "${args[@]}"
