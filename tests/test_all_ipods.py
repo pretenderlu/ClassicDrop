@@ -288,6 +288,24 @@ class Tier3ShuffleTests(unittest.TestCase):
         self.assertTrue((root / DB).is_file())
         self.assertEqual(len(shuffle_db.parse_itunessd((root / SD).read_bytes())), 3)
 
+    def test_shuffle_3g_and_unidentified_v2_support_alac(self):
+        root = self.site / "shuffle3"
+        with patch.object(system, "volume_ids", return_value=(r"USB\VID_05AC&PID_1302\SHUF3",)):
+            dev = make_shuffle_device(root, version=2)
+        self.assertEqual((dev.writable, dev.shuffle_version, dev.supports_alac, dev.profile.generation, dev.profile.shape),
+                         (True, 2, True, "3rd Gen", "shuffle3"))
+        transfer(dev, [FIXTURES / "lossless.m4a"], self.backups)
+        reloaded = Device.open(root)
+        self.assertEqual([t.metadata.file_format for t in reloaded.library.snapshot.tracks],
+                         ["Apple Lossless audio file"])
+        # Even without a USB PID, a bdhs v2 iTunesSD identifies 3G/4G (ALAC-capable), while v1 is 1G/2G (no ALAC).
+        with patch.object(system, "volume_ids", return_value=()):
+            v2_no_usb = Device.open(root)
+            v1_root = self.site / "shuffle_v1_no_usb"
+            v1_no_usb = make_shuffle_device(v1_root, version=1)
+        self.assertTrue(v2_no_usb.supports_alac)
+        self.assertFalse(v1_no_usb.supports_alac)
+
     def test_all_device_shapes_and_finishes_render(self):
         for shape in SHAPES:
             for finish in (None, "Silver", "White", "Graphite", "Space Gray", "Slate", "Gold", "U2", "Blue"):

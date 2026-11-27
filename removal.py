@@ -7,10 +7,11 @@ import os
 import plistlib
 import re
 import stat
-import system
 from pathlib import Path
 
 import cpuarch
+import diagnostics
+import system
 cpuarch.import_wasmtime()
 from iPodDB.sidecars import (MAX_SIDECAR_BYTES, genius_playlist_number, is_playback_sidecar,
                              parse_itunes_stats, parse_play_counts_plist, remap_genius_playlist,
@@ -116,9 +117,14 @@ def removal_receipt(device, desired, after_hash, report, genius=None):
         path = _music_file(device, track.metadata.location)
         if path is None or path in protected or path in media or not path.exists():
             continue
+        if not path.is_file():
+            raise ValueError(f"音频文件不可用，已停止删除：{path.name}")
         stamp = _file_stamp(path)
-        if not path.is_file() or stamp[0] != track.size_bytes:
-            raise ValueError(f"音频文件与曲库记录不符，已停止删除：{path.name}")
+        if stamp[0] != track.size_bytes:
+            diagnostics.log.warning(
+                "音频文件大小与曲库记录不符，仍按实际文件继续删除：%s（曲库 %d 字节，磁盘 %d 字节）",
+                path.name, track.size_bytes, stamp[0],
+            )
         media[path] = [path.relative_to(device.root).as_posix(), stamp]
     updates = {}
     for name, path in _sidecars(device).items():

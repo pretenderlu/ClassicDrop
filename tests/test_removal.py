@@ -13,7 +13,7 @@ from test_classicdrop import FIXTURES, GUID, mock_device
 from iPodDB.iTunesDB.writer.signature import sign_hash58, verify_hash58
 from iPodDB.library import MediaType
 from library import DB, MUSIC, STAGE, Device, is_music, playlist_edit, rename_device
-from transfer import recover_interrupted, transfer
+from transfer import export_tracks, recover_interrupted, transfer
 
 
 def positions(magic, header, width, values):
@@ -194,3 +194,36 @@ class MusicRemovalTests(unittest.TestCase):
         self.assertFalse((self.root / STAGE).exists())
         self.assertEqual(list((self.root / MUSIC).rglob("*.m*")), [])
         self.assertEqual(len(self.run_write(files=[FIXTURES / "aac.m4a"]).tracks), 1)
+
+    def test_delete_clear_and_export_allow_size_mismatch_and_guard_non_file(self):
+        tracks = self.device.library.snapshot.tracks
+        edited = self.root / tracks[0].metadata.location
+        modified_bytes = edited.read_bytes() + b"\x00" * 512  # e.g. tags/cover edited directly on iPod
+        edited.write_bytes(modified_bytes)
+
+        # Exporting a track whose on-disk size differs from iTunesDB still succeeds and preserves exact bytes.
+        out = self.site / "exported"
+        out.mkdir()
+        with self.assertLogs("ClassicDrop", level="WARNING") as export_logs:
+            self.assertEqual(export_tracks(self.device, [tracks[0]], out), 1)
+        self.assertTrue(any("导出音频大小与曲库记录不符" in msg for msg in export_logs.output))
+        exported_files = list(out.iterdir())
+        self.assertEqual(len(exported_files), 1)
+        self.assertEqual(exported_files[0].read_bytes(), modified_bytes)
+
+        # Clearing the music library removes the size-mismatched file cleanly without aborting.
+        with self.assertLogs("ClassicDrop", level="WARNING") as del_logs:
+            after = self.run_write(remove_ids=[t.track_id for t in tracks])
+        self.assertTrue(any("音频文件大小与曲库记录不符" in msg for msg in del_logs.output))
+        self.assertEqual(after.tracks, ())
+        self.assertFalse(edited.exists())
+        self.assertEqual(list((self.root / MUSIC).rglob("*.m*")), [])
+        self.assertTrue(verify_hash58(self.device.original, GUID))
+
+        # A directory masquerading at a track's path must still be rejected.
+        reloaded = self.run_write(files=[FIXTURES / "tone.mp3"])
+        bad = self.root / reloaded.tracks[0].metadata.location
+        bad.unlink()
+        bad.mkdir()
+        with self.assertRaises(ValueError):
+            self.run_write(remove_ids=[reloaded.tracks[0].track_id])

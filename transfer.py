@@ -13,6 +13,7 @@ from pathlib import Path
 
 from audio_convert import prepared_files
 import cpuarch
+import diagnostics
 import shuffle_db
 import system
 cpuarch.import_wasmtime()
@@ -485,8 +486,14 @@ def export_tracks(device, tracks, directory, report=lambda _: None):
             stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", title)[:100].strip(" .") or str(track.track_id)
             if Path(stem + suffix).is_reserved():
                 stem = "_" + stem
-            if source.stat().st_size != track.size_bytes:
-                raise ValueError("设备文件大小与曲库记录不一致。")
+            if not source.is_file():
+                raise ValueError("设备上找不到这首歌的音频文件。")
+            actual_size = source.stat().st_size
+            if actual_size != track.size_bytes:
+                diagnostics.log.warning(
+                    "导出音频大小与曲库记录不符，仍按实际文件导出：%s（曲库 %d 字节，磁盘 %d 字节）",
+                    source.name, track.size_bytes, actual_size,
+                )
             report(f"导出 {written + 1}/{len(tracks)} · {track.title}")
             with tempfile.NamedTemporaryFile(dir=directory, prefix=".classicdrop-", delete=False) as staged:
                 temp = Path(staged.name)

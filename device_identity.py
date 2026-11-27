@@ -36,7 +36,6 @@ _NO_ALAC = {
     ("iPod", "1st Gen"), ("iPod", "2nd Gen"), ("iPod", "3rd Gen"),
     ("iPod Mini", "1st Gen"),
     ("iPod Shuffle", "1st Gen"), ("iPod Shuffle", "2nd Gen"),
-    ("iPod Shuffle", "3rd Gen"), ("iPod Shuffle", ""),
 }
 
 _SUPPORTED_CHECKSUMS = {
@@ -98,6 +97,10 @@ class Player:
     @property
     def supports_alac(self):
         """Whether stock firmware on this model decodes Apple Lossless (ALAC)."""
+        if self.family == "iPod Shuffle":
+            # iTunesSD v2 (bdhs) is exclusive to shuffle 3rd/4th gen, both of which decode ALAC;
+            # v1 belongs to shuffle 1st/2nd gen, neither of which decodes ALAC.
+            return getattr(self.capabilities.database, "sd_version", 1) >= 2
         return (self.family, self.generation) not in _NO_ALAC
 
     @property

@@ -236,7 +236,7 @@ class ImportDialog(tk.Toplevel):
         self.timer = self.after(45, self._poll)
 
     def _fit_song(self, song):
-        """Drop ALAC choices for models whose stock firmware cannot decode ALAC (e.g. shuffle 1-3G, mini 1G)."""
+        """Drop ALAC choices for models whose stock firmware cannot decode ALAC (e.g. shuffle 1-2G, mini 1G)."""
         if self.allow_alac:
             return song
         choices = tuple(c for c in song.choices if c not in ("alac", "alac-fit", "alac-48")) or ("aac",)
