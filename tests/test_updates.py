@@ -38,6 +38,27 @@ class Reply(io.BytesIO):
         self.close()
 
 
+def cnb_release(tag, digest=DIGEST, size=10, name="ClassicDropSetup-v9.9.9.exe", **extra):
+    asset = {
+        "name": name,
+        "path": f"/pretenderlu/ClassicDrop/-/releases/download/{tag}/{name}",
+        "size_in_byte": size,
+        "hash_algo": "sha256",
+    }
+    if digest is not None:
+        asset["hash_value"] = digest
+    return {
+        "tag_ref": f"refs/tags/{tag}" if tag else "",
+        "title": f"ClassicDrop {tag}",
+        "body": "- 镜像修复若干问题",
+        "published_at": "2026-12-01T08:00:00Z",
+        "is_prerelease": False,
+        "is_draft": False,
+        "assets": [{"name": "ClassicDrop-Windows-x64.zip", "path": "/pretenderlu/ClassicDrop/-/releases/download/x/z.zip"}, asset],
+        **extra,
+    }
+
+
 def latest(payload):
     return patch.object(updates, "urlopen", return_value=Reply(json.dumps(payload).encode("utf8")))
 
@@ -65,6 +86,8 @@ class CheckTests(unittest.TestCase):
                              ("v9.9.9", "https://example.invalid/setup.exe", "ClassicDropSetup-v9.9.9.exe", 10, DIGEST,
                               "- 修复若干问题"))
             self.assertEqual(info.alternate_url, "https://api.example.invalid/asset/1")
+            self.assertEqual(info.mirror_url,
+                             "https://cnb.cool/pretenderlu/ClassicDrop/-/releases/download/v9.9.9/ClassicDropSetup-v9.9.9.exe")
 
     def test_release_that_cannot_be_verified_only_offers_its_page(self):
         for payload in (release("v9.9.9", digest=None), release("v9.9.9", digest="12"),
@@ -106,6 +129,45 @@ class CheckTests(unittest.TestCase):
         with latest(payload):
             self.assertEqual(check_for_updates("1.5.1").notes, "")
 
+    def test_check_falls_back_to_cnb_mirror_when_github_is_unreachable(self):
+        payload = cnb_release("v9.9.9")
+        payload["assets"].append({
+            "name": "ClassicDrop-macOS-arm64-v9.9.9.dmg",
+            "path": "/pretenderlu/ClassicDrop/-/releases/download/v9.9.9/ClassicDrop-macOS-arm64-v9.9.9.dmg",
+            "size_in_byte": 20,
+            "hash_algo": "sha256",
+            "hash_value": DIGEST,
+        })
+        replies = [URLError("timed out"), Reply(json.dumps(payload).encode("utf8"))]
+        with patch.object(updates, "urlopen", side_effect=replies) as opened, \
+                patch.object(updates, "mac_arch", return_value="arm64"):
+            info = check_for_updates("1.5.1")
+        self.assertEqual([c.args[0].full_url for c in opened.call_args_list], [
+            "https://api.github.com/repos/pretenderlu/ClassicDrop/releases/latest",
+            "https://cnb.cool/pretenderlu/ClassicDrop/-/releases/latest",
+        ])
+        self.assertEqual(opened.call_args_list[1].args[0].get_header("Accept"), updates.CNB_WEB_ACCEPT)
+        self.assertEqual(info.url, "https://cnb.cool/pretenderlu/ClassicDrop/-/releases/tag/v9.9.9")
+        expected_name = "ClassicDrop-macOS-arm64-v9.9.9.dmg" if system.MAC else "ClassicDropSetup-v9.9.9.exe"
+        self.assertEqual(info.installer_name, expected_name)
+        self.assertEqual(info.download_url, f"https://cnb.cool/pretenderlu/ClassicDrop/-/releases/download/v9.9.9/{expected_name}")
+        self.assertEqual(info.mirror_url, f"https://github.com/pretenderlu/ClassicDrop/releases/download/v9.9.9/{expected_name}")
+        self.assertEqual(info.sha256, DIGEST)
+
+        # Bad/missing digest or spoofed path on CNB still refuses automatic download and only offers the page.
+        bad_path = cnb_release("v9.9.9")
+        bad_path["assets"][1]["path"] = "/other/repo/-/releases/download/v9.9.9/ClassicDropSetup-v9.9.9.exe"
+        for bad in (cnb_release("v9.9.9", digest=None), cnb_release("v9.9.9", digest="12"), bad_path):
+            with patch.object(updates, "urlopen", side_effect=[URLError("reset"), Reply(json.dumps(bad).encode("utf8"))]):
+                info = check_for_updates("1.5.1")
+            self.assertEqual((info.download_url, info.sha256, info.mirror_url), ("", "", ""))
+            self.assertTrue(info.url.startswith("https://cnb.cool/"))
+
+        # When both GitHub and CNB fail, the original GitHub error is surfaced.
+        with patch.object(updates, "urlopen", side_effect=[URLError("gh-offline"), URLError("cnb-offline")]):
+            with self.assertRaisesRegex(URLError, "gh-offline"):
+                check_for_updates("1.5.1")
+
 
 class HistoryTests(unittest.TestCase):
     def test_published_releases_newest_first_with_readable_notes(self):
@@ -133,6 +195,22 @@ class HistoryTests(unittest.TestCase):
     def test_plain_notes(self):
         self.assertEqual(plain_notes("# 标题\n\n* 一\n  - 二\n__粗__ 与 `码`\n"), "标题\n\n· 一\n  · 二\n粗 与 码")
         self.assertEqual(plain_notes("  \n"), "")
+
+    def test_history_falls_back_to_cnb_mirror_when_github_is_unreachable(self):
+        older = cnb_release("v1.5.1", published_at="2026-11-22T12:27:38Z", body="- 旧版")
+        newest = cnb_release("v9.9.9", published_at="2026-12-01T08:00:00Z")
+        cnb_payload = {"releases": [older, cnb_release("v9.9.10", is_draft=True), newest, cnb_release("v10.0.0", is_prerelease=True)]}
+        replies = [URLError("blocked"), Reply(json.dumps(cnb_payload).encode("utf8"))]
+        with patch.object(updates, "urlopen", side_effect=replies) as opened:
+            releases, update = release_history("1.5.1")
+        self.assertEqual([c.args[0].full_url for c in opened.call_args_list], [
+            "https://api.github.com/repos/pretenderlu/ClassicDrop/releases?per_page=30",
+            "https://cnb.cool/pretenderlu/ClassicDrop/-/releases",
+        ])
+        self.assertEqual([(r.version, r.published) for r in releases], [("v9.9.9", "2026-12-01"), ("v1.5.1", "2026-11-22")])
+        self.assertTrue(all(r.url.startswith("https://cnb.cool/") for r in releases))
+        self.assertEqual(update.version, "v9.9.9")
+        self.assertEqual(update.sha256, "" if system.MAC else DIGEST)
 
 
 class DownloadTests(unittest.TestCase):
@@ -194,6 +272,32 @@ class DownloadTests(unittest.TestCase):
             result, opened, _ = self.run_download([], info)
             self.assertIn(text, str(result))
             opened.assert_not_called()
+
+    def test_download_switches_to_mirror_and_skips_unsynced_404_mirror(self):
+        mirrored = UpdateInfo(
+            "v9.9.9", "https://github.com/x", "https://dl.invalid/setup.exe", "setup.exe",
+            len(self.content), hashlib.sha256(self.content).hexdigest(), "https://api.invalid/asset",
+            mirror_url="https://cnb.cool/pretenderlu/ClassicDrop/-/releases/download/v9.9.9/setup.exe",
+        )
+        # Primary fails once -> immediately falls back to CNB mirror and succeeds with SHA-256 check.
+        result, opened, _ = self.run_download([URLError("reset"), Reply(self.content)], mirrored)
+        self.assertEqual(result.read_bytes(), self.content)
+        self.assertEqual([c.args[0].full_url for c in opened.call_args_list], [mirrored.download_url, mirrored.mirror_url])
+        self.target.unlink()
+
+        # If CNB mirror has not finished syncing (404), skip it and succeed via GitHub asset API.
+        mirror_404 = HTTPError(mirrored.mirror_url, 404, "Not Found", {}, None)
+        result, opened, _ = self.run_download([URLError("reset"), mirror_404, Reply(self.content)], mirrored)
+        self.assertEqual(result.read_bytes(), self.content)
+        self.assertEqual([c.args[0].full_url for c in opened.call_args_list],
+                         [mirrored.download_url, mirrored.mirror_url, mirrored.alternate_url])
+        self.target.unlink()
+
+        # If mirror returns 404 and GitHub asset API also fails, skip retrying the 404 mirror again.
+        result, opened, _ = self.run_download([URLError("reset"), mirror_404, URLError("still-down")], mirrored)
+        self.assertIn("下载失败", str(result))
+        self.assertEqual([c.args[0].full_url for c in opened.call_args_list],
+                         [mirrored.download_url, mirrored.mirror_url, mirrored.alternate_url])
 
 
 class ReleaseConsistencyTests(unittest.TestCase):

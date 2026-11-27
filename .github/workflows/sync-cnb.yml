@@ -33,7 +33,7 @@ jobs:
   sync:
     if: ${{ github.repository == 'pretenderlu/ClassicDrop' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       CNB_TOKEN: ${{ secrets.CNB }}
       CNB_REPO: pretenderlu/ClassicDrop

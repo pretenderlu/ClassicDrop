@@ -4,6 +4,7 @@ Stdlib-only (plus system curl for streaming large binary transfers without holdi
 """
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
 import os
@@ -195,21 +196,35 @@ def sync_release(gh_repo, gh_token, cnb_repo, cnb_token, *, cnb_api="https://api
 
     gh_assets = gh_release.get("assets") or []
     print(f"Syncing {len(gh_assets)} asset(s) for {gh_release['tag_name']} -> CNB release {release_id}")
+    pending = []
+    for asset in gh_assets:
+        name = asset["name"]
+        size = asset["size"]
+        prev = existing_assets.get(name)
+        if not overwrite and prev is not None and prev.get("size") == size:
+            print(f"  [skip] {name} ({size} bytes already on CNB)")
+        else:
+            pending.append(asset)
+
+    def transfer_one(asset, tmp_dir):
+        name = asset["name"]
+        size = asset["size"]
+        local_file = tmp_dir / name
+        print(f"  [download] {name} ({size} bytes) from GitHub...", flush=True)
+        download_github_asset(asset, gh_token, local_file)
+        try:
+            print(f"  [upload] {name} -> CNB...", flush=True)
+            upload_cnb_asset(cnb_api, cnb_repo, cnb_headers, release_id, local_file, name)
+            print(f"  [done] {name}", flush=True)
+        finally:
+            local_file.unlink(missing_ok=True)
+
     with tempfile.TemporaryDirectory(prefix="cnb-sync-") as tmp:
         tmp_dir = Path(tmp)
-        for asset in gh_assets:
-            name = asset["name"]
-            size = asset["size"]
-            prev = existing_assets.get(name)
-            if not overwrite and prev is not None and prev.get("size") == size:
-                print(f"  [skip] {name} ({size} bytes already on CNB)")
-                continue
-            local_file = tmp_dir / name
-            print(f"  [download] {name} ({size} bytes) from GitHub...")
-            download_github_asset(asset, gh_token, local_file)
-            print(f"  [upload] {name} -> CNB...")
-            upload_cnb_asset(cnb_api, cnb_repo, cnb_headers, release_id, local_file, name)
-            local_file.unlink(missing_ok=True)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(transfer_one, asset, tmp_dir) for asset in pending]
+            for future in as_completed(futures):
+                future.result()
 
     tag_quoted = urllib.parse.quote(gh_release["tag_name"], safe="")
     _, final = _json_request(
