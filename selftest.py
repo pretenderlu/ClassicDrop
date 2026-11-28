@@ -74,8 +74,9 @@ def self_test(output):
                 wav.writeframes(frames)
             destination = tmp / "tone.m4a"
             if mac:
-                encoders.afconvert_encode(["-f", "m4af", "-d", "alac"], ["-i", str(source)],
-                                          "pcm_s16le", destination)
+                encoders.afconvert_encode(
+                    ["-f", "m4af", "-d", "aac", "-b", "256000", "-c", "2", "-l", "Stereo", "-s", "2", "-q", "127"],
+                    ["-i", str(source)], "pcm_f32le", destination)
                 if not destination.is_file():
                     raise ValueError("afconvert 没有产出 m4a")
             else:

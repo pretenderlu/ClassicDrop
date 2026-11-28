@@ -1,10 +1,10 @@
-# ClassicDrop 1.7.2
+# ClassicDrop 1.7.3
 
 Windows 与 macOS 下的非 iOS 纯音频 iPod 曲库工具。覆盖 iPod classic（已在 2009 年末 160 GB 薄款上真机验证）、iPod video（5/5.5 代）、iPod 1–4 代、iPod mini（1/2 代）、iPod nano（1–7 代）与 iPod shuffle（1–4 代），所有日常操作都在本地完成，见「支持的机型」。支持 Windows 10/11 x64 与 macOS 12+（Apple 芯片和 Intel）；在 Windows 11 ARM64 电脑上以模拟方式运行 x64 版（Windows 10 ARM64 不能运行 x64 程序，不支持）。
 
 ## 安装与更新
 
-从 [GitHub Releases](https://github.com/pretenderlu/ClassicDrop/releases) 或中国大陆镜像 [CNB 发行版](https://cnb.cool/pretenderlu/ClassicDrop/-/releases)（免登录直下）下载 `ClassicDropSetup-v1.7.2.exe` 并运行。程序装在 `%LOCALAPPDATA%\Programs\ClassicDrop`，安装和卸载都不需要管理员权限。同一页面的 `ClassicDrop-Windows-x64.zip` 是免安装版，解压后运行其中的 ClassicDrop.exe。
+从 [GitHub Releases](https://github.com/pretenderlu/ClassicDrop/releases) 或中国大陆镜像 [CNB 发行版](https://cnb.cool/pretenderlu/ClassicDrop/-/releases)（免登录直下）下载 `ClassicDropSetup-v1.7.3.exe` 并运行。程序装在 `%LOCALAPPDATA%\Programs\ClassicDrop`，安装和卸载都不需要管理员权限。同一页面的 `ClassicDrop-Windows-x64.zip` 是免安装版，解压后运行其中的 ClassicDrop.exe。
 
 启动后程序会查询最新的正式版本（优先 GitHub，无法访问时自动切换至 CNB 国内镜像）。窗口右下角有 GitHub 链接、「反馈」和当前版本号。点「反馈」会打开一个小窗口，列出诊断信息（软件版本、Windows 版本、iPod 机型、最近一次报错和最近的运行日志）供先过目，再复制到剪贴板并打开 GitHub 的新建 Issue 页面。运行日志存在 `%LOCALAPPDATA%\ClassicDrop\Logs`，最多 3 个文件、每个 1 MB，会自动轮替。日志里会记录歌曲文件名；设备序列号、FireWire GUID 和设备名称一律不写入，写日志和诊断信息前会被替换成「[已隐藏]」，你的用户文件夹显示为 `~`。点版本号可以查看各个版本的更新记录。有新版本时，版本号旁边会出现一个红点，更新记录里会多出「下载并安装」按钮。点它之后程序下载安装包（GitHub 连接失败或中断时会自动切换至 CNB 镜像下载），核对 SHA-256 校验值，再自动安装并重新打开。正在传歌，或待传列表里还有歌曲时，需要先处理完再更新。也可以随时点「工具与备份 → 检查更新」。下载失败时可以重试，或打开发布页手动下载。查询只访问发布接口，不上传任何曲库或设备信息。
 
@@ -14,7 +14,7 @@ Windows 与 macOS 下的非 iOS 纯音频 iPod 曲库工具。覆盖 iPod classi
 
 程序没有经过 Apple 签名与公证。macOS 15 上第一次打开会被拦下：先尝试打开一次，再到「系统设置 → 隐私与安全性」里点「仍要打开」；也可以在终端执行 `xattr -dr com.apple.quarantine /Applications/ClassicDrop.app`。macOS 还可能在连接 iPod 时询问是否允许访问可移动宗卷，请允许。
 
-程序位于可写文件夹（如「应用程序」）时，「下载并安装」会自动完成更新：下载对应机型的 DMG、校验 SHA-256、替换程序本体并重新打开；位于不可写位置或被移到隔离位置时，会打开 DMG 请你手动拖入替换。数据和日志在 `~/Library/Application Support/ClassicDrop` 和 `~/Library/Logs/ClassicDrop`。编码器直接使用系统内置的 afconvert（Apple 自己的 ALAC/AAC 编码器），不需要安装任何组件。Mac 格式（HFS+）的 iPod 只能在 Mac 上使用。macOS 版本还没有在真机上完整验证过，请先少量传歌确认。
+程序位于可写文件夹（如「应用程序」）时，「下载并安装」会自动完成更新：下载对应机型的 DMG、校验 SHA-256、替换程序本体并重新打开；位于不可写位置或被移到隔离位置时，会打开 DMG 请你手动拖入替换。数据和日志在 `~/Library/Application Support/ClassicDrop` 和 `~/Library/Logs/ClassicDrop`。转换 AAC 时直接使用系统内置的 afconvert（Apple 编码器），ALAC 无损直接使用内置 FFmpeg 编码，不需要安装任何组件。Mac 格式（HFS+）的 iPod 只能在 Mac 上使用。macOS 版本还没有在真机上完整验证过，请先少量传歌确认。
 
 ## 支持的机型
 
@@ -53,7 +53,7 @@ Windows 与 macOS 下的非 iOS 纯音频 iPod 曲库工具。覆盖 iPod classi
 - **AAC-LC** 适合节省机内空间，输出 M4A。目标码率为立体声 256 kbps、单声道 128 kbps，实际码率随音源而变化。
 - **保留原文件格式** 默认用于 MP3 和 M4A（AAC-LC 或 ALAC），符合无损预设的 PCM WAV 也可以原样传入。原样传输支持单声道或双声道、最高 48 kHz。
 
-转码器随软件提供（macOS 使用系统内置的 afconvert 作为 Apple 编码器）。FFmpeg 负责全部解码（FLAC、WAV、DSD、重采样和混音）。编码时优先使用 Apple 品质的编码器：ALAC 使用随软件提供的 refalac（启用 Apple 组件时为 qaac），AAC 在启用 Apple 组件时使用 qaac，其余情况用 FFmpeg 编码。启用方法是「工具与备份 → Apple 编码器」：程序会从 Apple 官网下载 iTunes 安装包（约 200 MB），校验 Apple 签名后只提取编码器需要的组件（约 43 MB）到 `%LOCALAPPDATA%\ClassicDrop\QTfiles64`，不安装 iTunes。电脑上装有从 Apple 官网下载的 iTunes 时，程序会自动使用其中的组件，不需要另外下载：第一次转码，或打开「Apple 编码器」菜单时检测（每次运行检测一次，软件运行期间新装的 iTunes 需要重启软件或打开该菜单后才会用上）。微软商店版 iTunes 的组件无法使用，需要通过菜单下载。如果菜单显示未启用，同样可以直接下载。同一菜单可以移除提取的组件。编码器失败会自动回退到 FFmpeg 并记入运行日志。确认传输后才开始准备音频，支持无 DRM 的本地文件。「保留原格式」保留音频编码。有标签或封面需要补全、修改时，程序在电脑上的临时副本写入这些信息，再将副本传入 iPod。源文件保留原样。
+转码器随软件提供（macOS 转换 AAC 时使用系统内置的 afconvert 作为 Apple 编码器，ALAC 无损直接使用内置 FFmpeg 编码）。FFmpeg 负责全部解码（FLAC、WAV、DSD、重采样和混音）。编码时优先使用 Apple 品质的编码器：Windows 上 ALAC 使用随软件提供的 refalac（启用 Apple 组件时为 qaac），AAC 在启用 Apple 组件时使用 qaac，其余情况用 FFmpeg 编码。启用方法是「工具与备份 → Apple 编码器」：程序会从 Apple 官网下载 iTunes 安装包（约 200 MB），校验 Apple 签名后只提取编码器需要的组件（约 43 MB）到 `%LOCALAPPDATA%\ClassicDrop\QTfiles64`，不安装 iTunes。电脑上装有从 Apple 官网下载的 iTunes 时，程序会自动使用其中的组件，不需要另外下载：第一次转码，或打开「Apple 编码器」菜单时检测（每次运行检测一次，软件运行期间新装的 iTunes 需要重启软件或打开该菜单后才会用上）。微软商店版 iTunes 的组件无法使用，需要通过菜单下载。如果菜单显示未启用，同样可以直接下载。同一菜单可以移除提取的组件。编码器失败或产物校验未通过会自动回退到 FFmpeg 并记入运行日志。确认传输后才开始准备音频，支持无 DRM 的本地文件。「保留原格式」保留音频编码。有标签或封面需要补全、修改时，程序在电脑上的临时副本写入这些信息，再将副本传入 iPod。源文件保留原样。
 
 带内嵌封面的歌曲传入时，ClassicDrop 会为 iPod 原厂播放界面生成缩略图，并把封面关联到对应的歌曲。FLAC、WAV、DSF 或 DFF 内嵌的 JPEG、PNG 封面也会随转码保存在 M4A 中，有多张时优先使用标记为正面的图片。
 

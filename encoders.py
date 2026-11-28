@@ -94,14 +94,14 @@ _afconvert_cache = None  # not yet probed; "" means unusable
 
 
 def afconvert():
-    """Path to macOS's own Apple encoder when it can write ALAC/AAC m4a, else None."""
+    """Path to macOS's own Apple encoder when it can write AAC m4a, else None."""
     global _afconvert_cache
     if _afconvert_cache is not None:
         return _afconvert_cache or None
     _afconvert_cache = ""
     if not system.WINDOWS and Path(AFCONVERT).is_file():
         # Help-text wording differs between macOS versions, so probe by encoding a
-        # moment of silence to ALAC; success plus real output means usable.
+        # moment of silence to AAC; success plus real output means usable.
         try:
             with tempfile.TemporaryDirectory(prefix="classicdrop-") as folder:
                 src = Path(folder) / "probe.wav"
@@ -111,7 +111,8 @@ def afconvert():
                     wav.setsampwidth(2)
                     wav.setframerate(44100)
                     wav.writeframes(b"\0\0" * 4410)
-                probe = subprocess.run([AFCONVERT, "-f", "m4af", "-d", "alac", str(src), str(out)],
+                probe = subprocess.run([AFCONVERT, "-f", "m4af", "-d", "aac", "-b", "128000",
+                                        "-c", "1", "-l", "Mono", "-s", "2", "-q", "127", str(src), str(out)],
                                        capture_output=True, timeout=15, **system.NO_WINDOW)
                 if probe.returncode == 0 and out.is_file() and out.stat().st_size:
                     _afconvert_cache = AFCONVERT

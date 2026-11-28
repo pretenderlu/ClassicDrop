@@ -1316,7 +1316,8 @@ class App(RatingMixin):
             return
         if system.MAC:
             messagebox.showinfo("Apple 编码器",
-                                "使用 macOS 内置的 Apple 编码器转换 ALAC 和 AAC，无需安装其他组件。", parent=self.window)
+                                "转换 AAC 时使用 macOS 内置的 Apple 编码器，ALAC 无损直接使用内置 FFmpeg 编码，无需安装其他组件。",
+                                parent=self.window)
             return
         def checked(_):
             encoders.refresh()

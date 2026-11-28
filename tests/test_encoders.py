@@ -250,5 +250,72 @@ class InstallAppleTests(unittest.TestCase):
         self.assertEqual(self.left_behind(), [])
 
 
+class CrossPlatformEncoderFallbackTests(unittest.TestCase):
+    def setUp(self):
+        temp = TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.site = Path(temp.name).resolve()
+        self.wav = self.site / "a.wav"
+        write_wave(self.wav)
+        logging.disable(logging.NOTSET)
+        self.addCleanup(logging.disable, logging.WARNING)
+
+    def test_afconvert_is_used_for_aac_only_and_skips_alac(self):
+        calls = []
+        def fake_afconvert(af_args, decode, pcm, dest):
+            calls.append((list(af_args), pcm))
+            audio_convert._ffmpeg([*decode, "-c:a", "aac", "-b:a", "256k", "-f", "ipod", str(dest)])
+
+        alac_out = self.site / "out_alac.m4a"
+        aac_out = self.site / "out_aac.m4a"
+        with patch.object(encoders, "afconvert", return_value="/usr/bin/afconvert"), \
+                patch.object(encoders, "afconvert_encode", side_effect=fake_afconvert), \
+                patch.object(encoders, "qaac", return_value=None), \
+                patch.object(encoders, "refalac", return_value=None):
+            audio_convert._convert(self.wav, "alac", alac_out)
+            self.assertEqual(calls, [])
+            info = EasyMP4(alac_out).info
+            self.assertEqual((info.codec, info.sample_rate, info.bits_per_sample), ("alac", 44100, 16))
+            self.assertEqual(audio_convert._pcm_md5(self.wav, 44100, 2, "pcm_s16le"),
+                             audio_convert._pcm_md5(alac_out, 44100, 2, "pcm_s16le"))
+
+            audio_convert._convert(self.wav, "aac", aac_out)
+            self.assertEqual(len(calls), 1)
+            self.assertIn("aac", calls[0][0])
+            self.assertEqual(calls[0][1], "pcm_f32le")
+            self.assertEqual(EasyMP4(aac_out).info.codec, "mp4a.40.2")
+
+    def test_bad_external_output_falls_back_to_ffmpeg_after_post_verify(self):
+        # External encoder exits 0 but produces invalid/wrong-codec output: must fall back cleanly to FFmpeg.
+        def corrupt_afconvert(af_args, decode, pcm, dest):
+            dest.write_bytes(b"not-a-valid-m4a")
+
+        aac_out = self.site / "fallback_aac.m4a"
+        with patch.object(encoders, "afconvert", return_value="/usr/bin/afconvert"), \
+                patch.object(encoders, "afconvert_encode", side_effect=corrupt_afconvert), \
+                patch.object(encoders, "qaac", return_value=None), \
+                patch.object(encoders, "refalac", return_value=None), \
+                self.assertLogs("ClassicDrop", "WARNING") as caught:
+            audio_convert._convert(self.wav, "aac", aac_out)
+        self.assertTrue(any("afconvert AAC" in r.getMessage() for r in caught.records))
+        self.assertEqual(EasyMP4(aac_out).info.codec, "mp4a.40.2")
+
+        # Simulate an external ALAC encoder writing audio that fails _verify_duration (e.g. invalid samples per frame: 0).
+        def bad_alac_pipe(exe, env, tool_args, decode, raw, dest):
+            # Write half-volume ALAC (exits 0 and passes mp4_audio header check, but fails PCM/duration verify).
+            audio_convert._ffmpeg([*decode, "-af", "atrim=end_sample=2048", *alac_codec(16), "-f", "ipod", str(dest)])
+
+        alac_out = self.site / "fallback_alac.m4a"
+        with patch.object(encoders, "afconvert", return_value=None), \
+                patch.object(encoders, "qaac", return_value=None), \
+                patch.object(encoders, "refalac", return_value=(REFALAC_PATH, {})), \
+                patch.object(encoders, "pipe_encode", side_effect=bad_alac_pipe), \
+                self.assertLogs("ClassicDrop", "WARNING") as caught:
+            audio_convert._convert(self.wav, "alac", alac_out)
+        self.assertTrue(any("refalac" in r.getMessage() for r in caught.records))
+        self.assertEqual(audio_convert._pcm_md5(self.wav, 44100, 2, "pcm_s16le"),
+                         audio_convert._pcm_md5(alac_out, 44100, 2, "pcm_s16le"))
+
+
 if __name__ == "__main__":
     unittest.main()
